@@ -1,0 +1,131 @@
+import time
+import uuid
+from app.utils.core import ROLES, SLOTS, active_access
+from app.keyboards.inline import button, keyboard
+
+class Callbacks:
+    def callback(self,q):
+        uid=q['from']['id']; data=q.get('data','home')
+        self.api.call('answerCallbackQuery',callback_query_id=q['id'])
+        if q.get('message',{}).get('chat',{}).get('id')!=uid: return
+        if self.user(uid)['permanent']: return self.show(uid)
+        self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
+        if self.payment_callback(uid,data): return
+        parts=data.split(':'); action=parts[0]
+        if action=='buy': return self.buy(uid,parts[1])
+        if action=='proof':
+            g=self.group(parts[1])
+            if not g or g['role']!='proof' or not g['enabled'] or self.user(uid)['banned']: return
+            if not self.db.one('SELECT 1 FROM proof_used WHERE uid=? AND gid=?',(uid,g['id'])):
+                # Time starts on actual admission, not on pressing this button.
+                return self.screen(uid,'<b>👀 Ta visite découverte</b>\n10 minutes à partir de ton entrée.',
+                    [[button('🚪 Entrer',url=self.link(uid,g))],[button('⬅️ Retour','home')]])
+            return self.show(uid,'g:'+g['id'])
+        if action=='setting' and uid in self.owners:
+            key=parts[1]
+            if key not in ('referral_rule','unban_goal','words'): return
+            self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
+            prompt={'referral_rule':'Écris simple ou cascade.','unban_goal':'Envoie le nombre requis (1 à 10000).',
+                    'words':'Envoie les termes interdits, un par ligne. Un tiret pour vider.'}[key]
+            return self.screen(uid,prompt,[[button('⬅️ Annuler','admin')]])
+        if action in ('roles','role','slots','slot','toggle','edit','ads','adnew','adoff'):
+            g=self.group(parts[1])
+            if not g or not self.admin(uid,g): return
+            if action=='roles':
+                return self.screen(uid,'<b>Type de groupe</b>',[[button(r,'role:'+g['id']+':'+r)] for r in ROLES])
+            if action=='role':
+                if parts[2] not in ROLES or uid not in self.owners: return
+                if parts[2]=='portal' and self.db.one("SELECT 1 FROM groups WHERE role='portal' AND id!=?",(g['id'],)):
+                    return self.screen(uid,'Un seul portail est autorisé. Remplace le portail existant depuis sa fiche.',[[button('⬅️ Retour','a:'+g['id'])]])
+                self.db.run('UPDATE groups SET role=? WHERE id=?',(parts[2],g['id']))
+            if action=='slots':
+                return self.screen(uid,'<b>Créneau quotidien</b>',[[button(s,'slot:'+g['id']+':'+s)] for s in SLOTS])
+            if action=='slot' and parts[2] in SLOTS:
+                self.db.run('UPDATE groups SET slot=? WHERE id=?',(parts[2],g['id']))
+            if action=='toggle':
+                field=parts[2]
+                if field not in ('enabled','locker','monthly','anti'): return
+                if field=='enabled':
+                    if uid not in self.owners: return
+                    if not g['enabled']:
+                        if g['role']=='unset' or (g['role']=='vip' and (not g['description'].strip() or not self.payment_options(g['id']))):
+                            return self.screen(uid,'Complète le rôle, et pour un VIP la description et le prix.',[[button('⬅️ Retour','a:'+g['id'])]])
+                        self.check_rights(g)
+                    else:
+                        self.permissions(g,False)
+                        self.db.run('UPDATE groups SET opened=0 WHERE id=?',(g['id'],))
+                        self.db.set('locked:'+g['id'],'')
+                self.db.run(f'UPDATE groups SET {field}=? WHERE id=?',(1-g[field],g['id']))
+            if action=='edit':
+                field=parts[2]
+                if field not in ('description','goal','price','threshold','rules','weekday','chat'): return
+                if field=='chat' and uid not in self.owners: return
+                self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
+                return self.screen(uid,'Envoie la nouvelle valeur pour <b>'+field+'</b>.\nPour remplacer un groupe : son identifiant Telegram négatif, après avoir ajouté le bot administrateur.',[[button('⬅️ Annuler','a:'+g['id'])]])
+            if action=='ads':
+                ads=self.db.all('SELECT * FROM ads WHERE gid=?',(g['id'],))
+                rows=[[button(('🟢 ' if a['enabled'] else '⚪ ')+a['text'][:30],'adoff:'+g['id']+':'+a['id'])] for a in ads]
+                return self.screen(uid,'<b>📣 Publicités</b>\nClique une publicité pour activer/désactiver.',rows+[[button('➕ Ajouter','adnew:'+g['id'])],[button('⬅️ Retour','a:'+g['id'])]])
+            if action=='adnew':
+                self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
+                return self.screen(uid,'Envoie un texte ou une photo légendée.\nPremière ligne : 2, 4, 6 ou 12 (intervalle en heures).\nLignes suivantes : ta publicité.',[[button('⬅️ Annuler','a:'+g['id'])]])
+            if action=='adoff':
+                self.db.run('UPDATE ads SET enabled=1-enabled WHERE id=? AND gid=?',(parts[2],g['id']))
+            self.db.run('INSERT INTO audit(id,actor,action,created) VALUES (?,?,?,?)',(uuid.uuid4().hex,uid,data,time.time()))
+            return self.show(uid,'a:'+g['id'])
+        self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
+        return self.show(uid,data)
+
+    def input(self,uid,m,pending):
+        if self.payment_input(uid,m,pending): return
+        parts=pending.split(':'); action=parts[0]
+        value=m.get('text',m.get('caption','')).strip()
+        if action=='setting':
+            if uid not in self.owners: return
+            key=parts[1]
+            if key=='referral_rule' and value not in ('simple','cascade'): raise ValueError('Valeur : simple ou cascade.')
+            if key=='unban_goal' and not (value.isdigit() and 1<=int(value)<=10000): raise ValueError('Nombre entre 1 et 10000.')
+            self.db.set(key,'' if value=='-' else value)
+            page='admin'
+        else:
+            g=self.group(parts[1])
+            if not g or not self.admin(uid,g): return
+            if action=='adnew':
+                hours,sep,body=value.partition('\n')
+                if hours not in ('2','4','6','12') or not body: raise ValueError('Première ligne : 2, 4, 6 ou 12. Puis le texte.')
+                photo=m['photo'][-1]['file_id'] if m.get('photo') else None
+                if len(body)>1000: raise ValueError('Publicité limitée à 1000 caractères.')
+                self.db.run('INSERT INTO ads(id,gid,text,photo,interval_hours) VALUES (?,?,?,?,?)',
+                            (uuid.uuid4().hex,g['id'],body,photo,int(hours)))
+            else:
+                field=parts[2]
+                if field in ('goal','price','threshold','weekday'):
+                    if not value.isdigit(): raise ValueError('Envoie un nombre entier positif.')
+                    value=int(value)
+                    low,high=(0,6) if field=='weekday' else ((0,10000) if field=='price' else (1,10000))
+                    if not low<=value<=high: raise ValueError(f'Nombre entre {low} et {high}.')
+                elif field=='chat':
+                    if uid not in self.owners: return
+                    value=int(value)
+                    candidate={**g,'chat':value}
+                    self.check_rights(candidate)
+                    registered=self.db.one('SELECT * FROM groups WHERE chat=?',(value,))
+                    if registered and (registered['enabled'] or registered['role']!='unset'):
+                        raise ValueError('Ce groupe appartient déjà à une configuration. Utilise un nouveau groupe.')
+                    with self.db.transaction():
+                        if registered: self.db.run('DELETE FROM groups WHERE id=?',(registered['id'],))
+                        self.db.run('UPDATE groups SET chat=?,opened=0 WHERE id=?',(value,g['id']))
+                        self.db.run('DELETE FROM notices WHERE gid=?',(g['id'],))
+                        self.db.run('DELETE FROM links WHERE gid=?',(g['id'],))
+                        self.db.run('UPDATE members SET present=0 WHERE gid=?',(g['id'],))
+                    for a in self.db.all('SELECT * FROM access WHERE gid=? AND revoked=0',(g['id'],)):
+                        if active_access(a,time.time()):
+                            self.enqueue('sendMessage',dict(chat_id=a['uid'],text='Ton groupe a été remplacé. Ton accès est conservé.',reply_markup=keyboard([button('🚪 Retrouver mon accès',url=self.deep('g_'+g['id']))])))
+                    value=str(value)
+                elif field not in ('description','rules'): return
+                elif len(value)>2500: raise ValueError('Maximum 2500 caractères.')
+                if field!='chat': self.db.run(f'UPDATE groups SET {field}=? WHERE id=?',(value,g['id']))
+            page='a:'+g['id']
+        self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
+        self.show(uid,page)
+
