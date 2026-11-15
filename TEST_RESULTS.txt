@@ -1,0 +1,42 @@
+test_48_hour_reminder_once (test_bot.BotTests.test_48_hour_reminder_once) ... ok
+test_admin_tampered_callback_denied (test_bot.BotTests.test_admin_tampered_callback_denied) ... ok
+test_amount_and_currency_checked (test_bot.BotTests.test_amount_and_currency_checked) ... ok
+test_ban_blocks_purchase_and_entry (test_bot.BotTests.test_ban_blocks_purchase_and_entry) ... ok
+test_cancelled_payment_queues_refund (test_bot.BotTests.test_cancelled_payment_queues_refund) ... ok
+test_checkout_is_single_order (test_bot.BotTests.test_checkout_is_single_order) ... ok
+test_empty_cart_rejected (test_bot.BotTests.test_empty_cart_rejected) ... ok
+test_existing_access_not_purchasable (test_bot.BotTests.test_existing_access_not_purchasable) ... ok
+test_expired_access_is_not_active (test_bot.BotTests.test_expired_access_is_not_active) ... ok
+test_forwarded_invoice_rejected (test_bot.BotTests.test_forwarded_invoice_rejected) ... ok
+test_free_group_does_not_require_purchase (test_bot.BotTests.test_free_group_does_not_require_purchase) ... ok
+test_hash_index_retrieval_guarantee (test_bot.BotTests.test_hash_index_retrieval_guarantee) ... ok
+test_inactivity_does_not_erase_paid_access (test_bot.BotTests.test_inactivity_does_not_erase_paid_access) ... ok
+test_job_retry_not_reset_by_scheduler (test_bot.BotTests.test_job_retry_not_reset_by_scheduler) ... ok
+test_locker_blocks_below_threshold (test_bot.BotTests.test_locker_blocks_below_threshold) ... ok
+test_midnight_window (test_bot.BotTests.test_midnight_window) ... ok
+test_missing_vip_description_rejected (test_bot.BotTests.test_missing_vip_description_rejected) ... ok
+test_monthly_renewal_after_expiration (test_bot.BotTests.test_monthly_renewal_after_expiration) ... ok
+test_multi_vip_total_and_idempotent_payment (test_bot.BotTests.test_multi_vip_total_and_idempotent_payment) ... ok
+test_pending_referral_requires_continuous_presence (test_bot.BotTests.test_pending_referral_requires_continuous_presence) ... ok
+test_permanent_ban_cannot_be_downgraded (test_bot.BotTests.test_permanent_ban_cannot_be_downgraded) ... ok
+test_permissions_only_text_photo_video (test_bot.BotTests.test_permissions_only_text_photo_video) ... ok
+test_personal_link_accepts_owner (test_bot.BotTests.test_personal_link_accepts_owner) ... ok
+test_personal_link_cannot_be_used_by_another_account (test_bot.BotTests.test_personal_link_cannot_be_used_by_another_account) ... ok
+test_portal_ban_only_for_permanent (test_bot.BotTests.test_portal_ban_only_for_permanent) ... ok
+test_price_change_rejected_at_checkout (test_bot.BotTests.test_price_change_rejected_at_checkout) ... ok
+test_proof_once_per_lifetime (test_bot.BotTests.test_proof_once_per_lifetime) ... ok
+test_referral_not_spent_by_first_group (test_bot.BotTests.test_referral_not_spent_by_first_group) ... ok
+test_replacement_preserves_rights (test_bot.BotTests.test_replacement_preserves_rights) ... ok
+test_rotation_does_not_repeat (test_bot.BotTests.test_rotation_does_not_repeat) ... ok
+test_single_menu_across_pages (test_bot.BotTests.test_single_menu_across_pages) ... ok
+test_unavailable_vip_rejected (test_bot.BotTests.test_unavailable_vip_rejected) ... ok
+test_word_strike_is_idempotent (test_bot.BotTests.test_word_strike_is_idempotent) ... ok
+test_photo_reencoding_near (test_media.MediaTests.test_photo_reencoding_near) ... ok
+test_video_four_keyframes (test_media.MediaTests.test_video_four_keyframes) ... ok
+test_schema_settings_and_rollback (test_postgres.PostgresTests.test_schema_settings_and_rollback) ... skipped 'PostgreSQL de test non fourni'
+test_unique_pending_order (test_postgres.PostgresTests.test_unique_pending_order) ... skipped 'PostgreSQL de test non fourni'
+
+----------------------------------------------------------------------
+Ran 37 tests in 1.059s
+
+OK (skipped=2)
