@@ -17,11 +17,15 @@ def keyboard(*rows):
     return {'inline_keyboard': list(rows)}
 
 
-class App:
+from .payments import ManualPayments
+
+
+class App(ManualPayments):
     def __init__(self, db, api, owners, tz='Europe/Paris', support='Administrateur'):
         self.db, self.api, self.owners, self.tz, self.support = db, api, set(owners), tz, support
         self.me = api.call('getMe')
         self.last_tick = 0
+        self.payment_setup()
 
     def user(self, uid):
         self.db.run('INSERT INTO users(id) VALUES (?) ON CONFLICT(id) DO NOTHING', (uid,))
@@ -142,9 +146,10 @@ class App:
                 if g['role'] != 'vip':
                     text += progress(n,g['goal'])+' invitations validées\n'
                     rows += [[button('🔗 Inviter mes amis','invite')]]
-                pending = self.db.one("SELECT id FROM orders WHERE uid=? AND gid=? AND status IN ('pending','checkout')",(uid,g['id']))
-                if g['price'] > 0:
-                    label = '⏳ Reprendre mon paiement' if pending else f'⚡ Accès — {g["price"]} ⭐' + (' / 30 jours' if g['monthly'] else '')
+                pending = self.db.one("SELECT id FROM manual_orders WHERE uid=? AND gid=? AND status IN ('awaiting_proof','review')",(uid,g['id']))
+                if self.payment_options(g['id']) or pending:
+                    label = '⏳ Reprendre mon paiement' if pending else ('⚡ Accès coupe-file' if g['role']!='vip' else '💳 Obtenir cet accès')
+                    if g['monthly'] and not pending: label += ' / 30 jours'
                     rows += [[button(label,'buy:'+g['id'])]]
             rows += [[button('🔄 Actualiser',page),button('⬅️ Accueil','home')]]
             return self.screen(uid,text,rows)
@@ -152,6 +157,7 @@ class App:
             rows = [[button(('✅ ' if g['enabled'] else '⚙️ ')+g['title'],'a:'+g['id'])]
                     for g in self.db.all('SELECT * FROM groups ORDER BY title')]
             rows += [[button('🔗 Règle invitations','setting:referral_rule'),button('🔓 Débannissement','setting:unban_goal')],
+                     [button('💳 Paiements','payments'),button('⚙️ Moyens de paiement','payconfig')],
                      [button('🚫 Mots interdits','setting:words')],[button('⬅️ Accueil','home')]]
             return self.screen(uid,'<b>🛠 Administration du réseau</b>\nAjoute le bot administrateur à un supergroupe pour le connecter.',rows)
         if page.startswith('a:'):
@@ -159,7 +165,7 @@ class App:
             if not g or not self.admin(uid,g): return self.show(uid)
             rows = [[button('Rôle : '+g['role'],'roles:'+g['id'])],
                     [button('📝 Description','edit:'+g['id']+':description'),button('🎯 Objectif','edit:'+g['id']+':goal')],
-                    [button('⭐ Prix en Stars','edit:'+g['id']+':price'),button('30 jours : '+str(bool(g['monthly'])),'toggle:'+g['id']+':monthly')],
+                    [button('💳 Tarifs','prices:'+g['id']),button('30 jours : '+str(bool(g['monthly'])),'toggle:'+g['id']+':monthly')],
                     [button('🔒 Locker : '+('ON' if g['locker'] else 'OFF'),'toggle:'+g['id']+':locker'),button('Seuil : '+str(g['threshold']),'edit:'+g['id']+':threshold')],
                     [button('🕐 '+g['slot'],'slots:'+g['id']),button('Jour gratuit : '+str(g['weekday']),'edit:'+g['id']+':weekday')],
                     [button('📜 Règles','edit:'+g['id']+':rules'),button('Anti-repost : '+str(bool(g['anti'])),'toggle:'+g['id']+':anti')],
@@ -184,34 +190,9 @@ class App:
         rows += [[button('🔄 Actualiser','home')]]
         return self.screen(uid,text,rows)
 
-    def buy(self, uid, gid):
-        g=self.group(gid)
-        if not g or not g['enabled'] or g['price']<=0 or self.user(uid)['banned'] or self.entitled(uid,g):
-            return self.show(uid,'g:'+gid)
-        with self.db.transaction():
-            order=self.db.one("SELECT * FROM orders WHERE uid=? AND gid=? AND status IN ('pending','checkout')",(uid,gid))
-            if not order:
-                oid=uuid.uuid4().hex
-                self.db.run("INSERT INTO orders(id,uid,gid,amount,monthly,status,created) VALUES (?,?,?,?,?,'pending',?)",
-                            (oid,uid,gid,g['price'],g['monthly'],time.time()))
-                order=self.db.one('SELECT * FROM orders WHERE id=?',(oid,))
-        if not order['invoice']:
-            url=self.api.call('createInvoiceLink',title=g['title'][:32],description=g['description'][:255] or 'Accès au groupe',
-                payload=order['id'],provider_token='',currency='XTR',prices=[{'label':'Accès','amount':order['amount']}])
-            self.db.run('UPDATE orders SET invoice=? WHERE id=?',(url,order['id']))
-            order['invoice']=url
-        self.screen(uid,'<b>💳 Ton accès</b>\n\n'+str(order['amount'])+' Stars'+('\nDurée : 30 jours, renouvellement manuel.' if order['monthly'] else '\nPaiement unique.'),
-            [[button('⭐ Payer avec Telegram',url=order['invoice'])],[button('🔄 Vérifier mon accès','g:'+gid),button('⬅️ Retour','g:'+gid)]])
-
     def checkout(self,q):
-        o=self.db.one('SELECT * FROM orders WHERE id=?',(q['invoice_payload'],))
-        g=self.group(o['gid']) if o else None
-        ok=bool(o and g and g['enabled'] and o['uid']==q['from']['id'] and o['status']=='pending'
-                and q['currency']=='XTR' and q['total_amount']==o['amount']
-                and not self.user(o['uid'])['banned'] and not self.entitled(o['uid'],g))
-        if ok: self.db.run("UPDATE orders SET status='checkout' WHERE id=?",(o['id'],))
-        self.api.call('answerPreCheckoutQuery',pre_checkout_query_id=q['id'],ok=ok,
-                      **({} if ok else {'error_message':'Cet achat est indisponible ou cet accès est déjà acquis.'}))
+        self.api.call('answerPreCheckoutQuery',pre_checkout_query_id=q['id'],ok=False,
+                      error_message='Les paiements Stars sont désactivés. Reviens dans le menu du bot.')
 
     def paid(self,uid,p):
         o=self.db.one('SELECT * FROM orders WHERE id=?',(p['invoice_payload'],))
@@ -233,6 +214,8 @@ class App:
         self.api.call('answerCallbackQuery',callback_query_id=q['id'])
         if q.get('message',{}).get('chat',{}).get('id')!=uid: return
         if self.user(uid)['permanent']: return self.show(uid)
+        self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
+        if self.payment_callback(uid,data): return
         parts=data.split(':'); action=parts[0]
         if action=='buy': return self.buy(uid,parts[1])
         if action=='proof':
@@ -270,7 +253,7 @@ class App:
                 if field=='enabled':
                     if uid not in self.owners: return
                     if not g['enabled']:
-                        if g['role']=='unset' or (g['role']=='vip' and (not g['description'].strip() or g['price']<=0)):
+                        if g['role']=='unset' or (g['role']=='vip' and (not g['description'].strip() or not self.payment_options(g['id']))):
                             return self.screen(uid,'Complète le rôle, et pour un VIP la description et le prix.',[[button('⬅️ Retour','a:'+g['id'])]])
                         self.check_rights(g)
                     else:
@@ -299,6 +282,7 @@ class App:
         return self.show(uid,data)
 
     def input(self,uid,m,pending):
+        if self.payment_input(uid,m,pending): return
         parts=pending.split(':'); action=parts[0]
         value=m.get('text',m.get('caption','')).strip()
         if action=='setting':
