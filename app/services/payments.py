@@ -1,5 +1,6 @@
 """Manual external payment review. Amounts are stored as integer cents, never floats."""
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from app.utils.group_roles import allows
 import time
 import uuid
 
@@ -31,7 +32,7 @@ class ManualPayments:
 
     def buy(self,uid,gid):
         g=self.group(gid)
-        if not g or not g['enabled'] or self.user(uid)['banned'] or self.entitled(uid,g):
+        if not g or not g['enabled'] or not allows(g['role'],'prices') or self.user(uid)['banned'] or self.entitled(uid,g):
             return self.show(uid,'g:'+gid)
         order=self.db.one("SELECT * FROM manual_orders WHERE uid=? AND gid=? AND status IN ('awaiting_proof','review')",(uid,gid))
         if order: return self.payment_page(uid,order['id'])
@@ -45,7 +46,7 @@ class ManualPayments:
     def payment_choose(self,uid,gid,method):
         if method not in METHODS: return
         g=self.group(gid)
-        if not g or not g['enabled'] or self.user(uid)['banned'] or self.entitled(uid,g): return self.show(uid,'g:'+gid)
+        if not g or not g['enabled'] or not allows(g['role'],'prices') or self.user(uid)['banned'] or self.entitled(uid,g): return self.show(uid,'g:'+gid)
         with self.db.transaction():
             order=self.db.one("SELECT * FROM manual_orders WHERE uid=? AND gid=? AND status IN ('awaiting_proof','review')",(uid,gid))
             if not order:
@@ -54,7 +55,7 @@ class ManualPayments:
                 if not price or not destination: return
                 name,currency,fee=METHODS[method]; oid=uuid.uuid4().hex
                 self.db.run("INSERT INTO manual_orders(id,uid,gid,method,currency,base,fee,total,destination,monthly,status,created) VALUES (?,?,?,?,?,?,?,?,?,?,'awaiting_proof',?)",
-                    (oid,uid,gid,method,currency,price['cents'],fee,total(price['cents'],fee),destination,g['monthly'],time.time()))
+                    (oid,uid,gid,method,currency,price['cents'],fee,total(price['cents'],fee),destination,g['monthly'] if g['role']=='vip' else 0,time.time()))
                 order=self.db.one('SELECT * FROM manual_orders WHERE id=?',(oid,))
         self.payment_page(uid,order['id'])
 
@@ -86,7 +87,7 @@ class ManualPayments:
             if not o or o['status']!='review': return
             g=self.group(o['gid']); status='rejected'
             if approve:
-                if not g or not g['enabled'] or self.user(o['uid'])['banned'] or self.entitled(o['uid'],g):
+                if not g or not g['enabled'] or not allows(g['role'],'prices') or self.user(o['uid'])['banned'] or self.entitled(o['uid'],g):
                     status='conflict'
                 else:
                     self.grant(o['uid'],g,'payment',time.time()+30*86400 if o['monthly'] else None)

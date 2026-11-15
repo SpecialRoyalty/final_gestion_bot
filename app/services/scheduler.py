@@ -15,10 +15,10 @@ class Scheduler:
                          'can_add_web_page_previews':False,'can_invite_users':False,
                          'can_change_info':False,'can_pin_messages':False})
 
-    def notice(self,g,kind,text,rows):
+    def notice(self,g,kind,text,rows,force=False):
         old=self.db.one('SELECT * FROM notices WHERE gid=? AND kind=?',(g['id'],kind))
         body=json.dumps([text,rows],ensure_ascii=False)
-        if old and old['body']==body: return
+        if old and old['body']==body and not force: return
         args=dict(chat_id=g['chat'],text=text,reply_markup=keyboard(*rows))
         if old:
             try:
@@ -30,6 +30,23 @@ class Scheduler:
         sent=self.api.call('sendMessage',**args)
         self.db.run('INSERT INTO notices(gid,kind,mid,body) VALUES (?,?,?,?) ON CONFLICT(gid,kind) DO UPDATE SET mid=excluded.mid,body=excluded.body',
                     (g['id'],kind,sent['message_id'],body))
+
+    def publish_portal(self,g,force=False):
+        if g['role']!='portal' or not g['enabled']: return False
+        live=self.db.one("SELECT * FROM groups WHERE enabled=1 AND role='chat' AND opened=1")
+        text=g['description'] or '✨ Bienvenue ! Découvre les groupes et débloque tes accès.'
+        if live: text+='\n\n🔥 '+live['title']+' est ouvert !'
+        rows=[[button('👤 Découvrir les groupes',url=self.deep())]]
+        if live: rows.insert(0,[button('🔥 '+live['title'],url=self.deep('g_'+live['id']))])
+        try:
+            self.notice(g,'portal',text,rows,force=force)
+        except APIError as error:
+            message='Publication impossible : '+str(error)
+            self.db.set('portal_error:'+g['id'],message)
+            self.alert(g['title']+' : '+message)
+            return False
+        self.db.set('portal_error:'+g['id'],'')
+        return True
 
     def remove_notice(self,g,kind):
         old=self.db.one('SELECT * FROM notices WHERE gid=? AND kind=?',(g['id'],kind))
@@ -183,11 +200,7 @@ class Scheduler:
         live=self.db.one("SELECT * FROM groups WHERE enabled=1 AND role='chat' AND opened=1")
         for g in groups:
             if g['role']=='portal':
-                text=g['description'] or '✨ Bienvenue ! Découvre les groupes et débloque tes accès.'
-                if live: text+='\n\n🔥 '+live['title']+' est ouvert !'
-                rows=[[button('👤 Découvrir les groupes',url=self.deep())]]
-                if live: rows.insert(0,[button('🔥 '+live['title'],url=self.deep('g_'+live['id']))])
-                self.notice(g,'portal',text,rows)
+                self.publish_portal(g)
             elif g['role'] in ('chat','always','free'):
                 if live and g['id']!=live['id']:
                     self.notice(g,'live','🔥 '+live['title']+' est ouvert !',
