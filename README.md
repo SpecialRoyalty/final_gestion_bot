@@ -211,7 +211,7 @@ Le correctif vérifie le schéma avant la création des index et applique unique
   Aucune ligne supprimée, aucun identifiant de groupe inventé, aucun DROP TABLE automatique.
 
 Les réparations et migrations se font dans la même transaction : un échec annule l’ensemble.
-Les fichiers SQL déjà appliqués sont vérifiés par empreinte et ne doivent pas être modifiés.
+Les sources SQL embarquées déjà appliquées sont vérifiées par empreinte et ne doivent pas être modifiées.
 Le thread média ouvre une connexion séparée sans relancer les migrations.
 
 Si le schéma de ta base est différent de ces cas, exécuter dans l’environnement Railway :
@@ -236,7 +236,7 @@ Ne pas supprimer PostgreSQL pour contourner cette erreur.
 
 ### Résultats des vérifications
 
-- 51 tests locaux réussis (logique, paiements, captures, migrations et conservation des données).
+- 53 tests locaux réussis (logique, paiements, captures, migrations et conservation des données).
 - 3 scénarios SQL réussis sur PostgreSQL 16.2 en mode autonome : installation/réexécution,
   réparation de `orders.gid` absent sur table vide, renommage avec conservation des valeurs.
 - 6 tests d’intégration PostgreSQL via psycopg fournis, non exécutés dans cet environnement :
@@ -246,3 +246,25 @@ Ne pas supprimer PostgreSQL pour contourner cette erreur.
 Pour exécuter les tests d’intégration, définir `TEST_POSTGRES_URL` vers une base de test jetable,
 jamais vers la production, puis lancer `python -m unittest discover -s tests -v`.
 Les tests créent et retirent uniquement leurs schémas aléatoires préfixés `test_network_`.
+
+## Version 4 — ressources de migration embarquées
+
+Correction du démarrage `FileNotFoundError: .../migrations/expected.json`.
+Le schéma attendu et les deux sources SQL sont intégrés directement dans `app/db/migration.py`.
+Il n’y a plus de lecture de `expected.json`, de dossier de ressources obligatoire, ni de recherche
+par glob de fichiers SQL au démarrage. Les noms et empreintes des migrations précédentes sont
+conservés, afin de rester compatibles avec une base déjà initialisée.
+
+Le Dockerfile exécute `python -m app.selfcheck` lors de la construction : ce contrôle importe
+le point d’entrée réel et initialise deux fois une base SQLite en mémoire. Il ne contacte ni
+Telegram ni PostgreSQL et ne nécessite aucun secret. Ce contrôle ne remplace pas la recette
+sur Railway et Telegram.
+
+Déploiement : extraire l’archive puis placer **le contenu** du dossier `telegram-network`
+à la racine du dépôt/service, avec le Dockerfile, `requirements.txt` et le dossier `app`.
+Remplacer la version précédente complète, puis redéployer. Conserver DATABASE_URL et les données.
+Commande de démarrage : `python -m app.main`.
+
+Tests : 53 réussis, 6 tests d’intégration réseau PostgreSQL non exécutés ici (sockets interdits).
+Un test copie seulement les fichiers `.py`, se place dans un autre répertoire de travail et
+exécute le contrôle : aucune dépendance aux anciens fichiers JSON/SQL.
