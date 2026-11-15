@@ -44,8 +44,11 @@ Le token ne doit jamais être commité ni envoyé dans cette conversation.
 - En cascade, le filleul doit avoir recruté une personne restée 5 minutes. Pas de récursion infinie.
 - Droits d'accès stables, liés à l'identifiant logique du groupe, et liens d'entrée de 10 minutes
   avec demande d'adhésion vérifiée contre l'identité et les droits de l'utilisateur.
-- Coupe-file et VIP en **Telegram Stars**. Contrôle du montant, acheteur, devise, double paiement,
-  achat devenu inutile, remboursement automatique si l'accès a été obtenu pendant le paiement.
+- Coupe-file et VIP : **PayPal (+15 %), Revolut (+15 %) et USDT TRC20**, avec preuve et validation humaine.
+  Coordonnées globales et prix de base par groupe/moyen configurables par boutons.
+  Prix et destinataire figés à la création de la demande ; aucun taux EUR/USDT implicite.
+  Vérification réelle du transfert par les responsables OWNER_IDS avant validation.
+  Double validation bloquée et cas d'accès déjà obtenu signalé pour régularisation manuelle.
 - VIP à paiement unique ou **accès de 30 jours à renouvellement manuel** ; pas de prélèvement automatique.
 - Rotation quotidienne d'un seul groupe classique ; créneaux traversant minuit ; gratuit hebdomadaire indépendant.
 - Locker ON/OFF : seuil de membres présents, comptage Telegram moins le bot. Les autres bots et admins
@@ -74,8 +77,11 @@ Le token ne doit jamais être commité ni envoyé dans cette conversation.
 
 ## Limites à connaître avant utilisation réelle
 
-- Les paiements PayPal, Revolut et USDT avec capture n'ont pas été activés : les accès numériques vendus
-  dans un bot doivent utiliser les Stars. La vérification manuelle de captures est donc remplacée.
+- Les paiements externes sont validés manuellement : aucune API PayPal/Revolut/blockchain ne confirme
+  le transfert. Une capture ne prouve pas à elle seule sa réception. Vérifier le compte destinataire.
+  Le bot ne réalise aucun remboursement externe automatique.
+- Les nouvelles factures Stars sont désactivées. Les événements de paiement Stars déjà en vol
+  d'une ancienne version restent traités pour ne pas perdre une transaction antérieure.
 - Les notifications nécessitent que l'utilisateur ait démarré le bot et ne l'ait pas bloqué.
 - Le message public et le message privé sont distincts. Les messages d'un utilisateur (ex. saisie admin)
   restent dans sa conversation ; « un seul message » désigne le message de navigation du bot.
@@ -131,8 +137,10 @@ Sur un réseau de test, avec deux administrateurs et plusieurs comptes de test :
 1. Vérifier les boutons et le retour sans nouveaux messages de navigation.
 2. Rejoindre/quitter le portail avant et après cinq minutes ; vérifier les modes simple/cascade.
 3. Tester le même lien d'accès avec son propriétaire et un autre compte ; vérifier le refus du second.
-4. Payer en environnement de test Telegram ; rejouer le paiement et tester l'achat concurrent à un déblocage.
-5. Tester les échéances, renouvellements, remboursement et suppression effective après expiration.
+4. Créer des demandes de test pour les trois moyens, transmettre des preuves fictives puis vérifier
+   validation/refus, double validation, preuve réutilisée et accès acquis pendant la vérification.
+5. Tester les échéances, renouvellements et suppression effective après expiration. Vérifier
+   le parcours de régularisation manuelle pour un transfert reçu mais un accès devenu indisponible.
 6. Tester le locker sous/au-dessus du seuil, minuit, heure d'été/hiver, fermeture et groupe gratuit.
 7. Tester texte/photo/vidéo, album, photo recompressée, vidéo, blacklist et média >20 Mio.
 8. Retirer les permissions du bot ; constater les alertes et les reprises après restauration.
@@ -142,3 +150,27 @@ Sur un réseau de test, avec deux administrateurs et plusieurs comptes de test :
 Documentation de référence consultée :
 - https://core.telegram.org/bots/api
 - https://core.telegram.org/bots/payments-stars
+
+## Configuration des paiements manuels (version 2)
+
+1. Administration → Moyens de paiement : saisir le destinataire PayPal, les coordonnées Revolut
+   et l’adresse USDT TRC20. Un tiret désactive un moyen pour les nouveaux achats.
+2. Administration → Groupe → Tarifs : saisir séparément les bases PayPal et Revolut en EUR,
+   puis le tarif USDT en USDT. Exemple : base 10 EUR → total 11,50 EUR avec supplément.
+   Les prix acceptent deux décimales et sont stockés en centimes, sans calcul flottant.
+3. L’utilisateur choisit le moyen, consulte le total et le destinataire, paie, puis envoie sa preuve.
+4. Les responsables OWNER_IDS reçoivent la capture/PDF et un bouton Examiner. Les administrateurs
+   de groupes ordinaires peuvent gérer les tarifs de leur groupe, mais ne valident pas les paiements.
+5. Le responsable vérifie le transfert reçu puis clique Paiement reçu ou Refuser.
+6. Un VIP de 30 jours démarre à la validation ; la double validation ne prolonge pas sa durée.
+
+Une seule demande en cours par utilisateur/groupe. Les demandes en vérification n’expirent pas
+silencieusement. Une demande sans preuve peut être annulée par le membre uniquement s’il n’a pas payé.
+La même preuve identifiée par Telegram est refusée si elle a déjà été soumise ; une image modifiée
+peut contourner cette détection, d’où la vérification du transfert réel par l’administrateur.
+Les preuves restent hébergées chez Telegram ; seuls leurs identifiants sont enregistrés dans la base.
+
+Mise à jour depuis la version 1 : sauvegarder la base, remplacer le code, redémarrer. Les tables
+manuelles sont ajoutées sans supprimer les données existantes. Les anciens prix Stars ne sont
+pas convertis en euros : configurer les nouveaux tarifs et coordonnées avant de proposer les achats.
+Les commandes en état « conflict » restent visibles pour traitement/remboursement hors du bot.
