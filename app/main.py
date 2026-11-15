@@ -25,7 +25,7 @@ def main():
     stop=threading.Event()
     worker=threading.Thread(target=run_worker,args=(os.environ['DATABASE_URL'],token,stop),daemon=True)
     worker.start()
-    logging.info('Bot démarré. Un seul processus de polling autorisé.')
+    logging.info('Bot démarré. Réception des événements Telegram active ; /start et navigation disponibles.')
     while True:
         try:
             app.tick()
