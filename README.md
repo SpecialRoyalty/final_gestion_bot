@@ -268,3 +268,38 @@ Commande de démarrage : `python -m app.main`.
 Tests : 53 réussis, 6 tests d’intégration réseau PostgreSQL non exécutés ici (sockets interdits).
 Un test copie seulement les fichiers `.py`, se place dans un autre répertoire de travail et
 exécute le contrôle : aucune dépendance aux anciens fichiers JSON/SQL.
+
+## Version 5 — menus adaptés au rôle et publication du portail
+
+La fiche d’administration affiche uniquement les réglages utiles au rôle sélectionné :
+
+| Rôle | Réglages propres au rôle |
+| --- | --- |
+| Portail | Texte, Activer et publier, Publier / actualiser ; aucun objectif, tarif, abonnement ou horaire. |
+| Chat classique | Objectif, coupe-file, locker, créneau, règles, anti-repost, publicités. |
+| Chat 24 h/24 | Objectif, coupe-file, locker, règles, anti-repost, publicités ; aucun créneau. |
+| VIP | Tarifs, paiement unique/mensuel, locker, règles, anti-repost, publicités ; aucun objectif d’invitations. |
+| Preuve | Description ; visite de 10 minutes, une seule fois. |
+| Gratuit | Locker, jour hebdomadaire, créneau, règles, anti-repost, publicités ; aucun tarif. |
+
+Les contrôles de rôle s’appliquent aussi côté serveur aux anciens boutons et saisies en attente.
+Les libellés techniques True/False et les numéros de jours sont remplacés par ON/OFF, unique/mensuel
+et les noms de jours. Le seuil du locker est visible lorsqu’il est activé.
+
+Un groupe enregistré avec le rôle Portail reste désactivé tant que le responsable n’a pas cliqué
+**Activer et publier**. L’activation vérifie les droits du bot puis publie immédiatement le message
+public, même si aucun groupe de chat n’existe. La fiche indique séparément l’état activé/désactivé
+et le message publié/pas encore publié. Les erreurs de publication sont affichées sur cette fiche.
+Le bouton **Publier / actualiser** modifie le message public existant ; si celui-ci a été supprimé,
+il en recrée un. Modifier le texte d’un portail actif actualise immédiatement le message.
+Changer le rôle d’un groupe actif le désactive : il faut valider les réglages du nouveau rôle et le réactiver.
+
+`/start` reste disponible à tout moment dans la conversation privée. Il annule une saisie en attente
+et ramène à l’accueil en éditant le message de navigation. « Un seul processus de polling » désignait
+une seule instance serveur recevant les événements Telegram, pas une limite d’utilisation de `/start`.
+Le texte du log de démarrage est désormais explicite.
+
+Vérification : 71 tests locaux réussis ; 6 tests réseau PostgreSQL non exécutés dans cet environnement.
+Les nouveaux tests couvrent tous les rôles, l’activation sans groupe de chat, le refus de permissions,
+les erreurs de publication, le rafraîchissement sans doublon, la récupération d’un message supprimé,
+les anciens boutons et les appels répétés de `/start`.
