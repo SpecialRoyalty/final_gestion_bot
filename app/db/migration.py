@@ -1,12 +1,218 @@
 """Transactional bootstrap and narrowly defined, data-preserving compatibility migration."""
 import hashlib
-import json
-from pathlib import Path
 import re
 import time
 
-ROOT=Path(__file__).parent/'migrations'
-EXPECTED=json.loads((ROOT/'expected.json').read_text())
+# Embedded deployment resources: importing this module requires Python files only.
+# Preserve source strings byte-for-byte: existing database migration checksums depend on them.
+MIGRATIONS = (('001_initial.sql',
+  'CREATE TABLE IF NOT EXISTS media_tasks (id TEXT PRIMARY KEY, gid TEXT NOT NULL, mid BIGINT NOT '
+  'NULL, file_id TEXT NOT NULL, download_id TEXT NOT NULL, kind TEXT NOT NULL, due DOUBLE '
+  'PRECISION NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);\n'
+  'CREATE TABLE IF NOT EXISTS media_files (file_id TEXT NOT NULL, sha TEXT NOT NULL, gid TEXT NOT '
+  'NULL, PRIMARY KEY(file_id,gid));\n'
+  'CREATE INDEX IF NOT EXISTS media_sha ON media_files(sha);\n'
+  'CREATE TABLE IF NOT EXISTS media_hashes (file_id TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY '
+  'KEY(file_id,hash));\n'
+  'CREATE INDEX IF NOT EXISTS media_hash_lookup ON media_hashes(hash);\n'
+  'CREATE TABLE IF NOT EXISTS hash_bands (hash TEXT NOT NULL, band INTEGER NOT NULL, value TEXT '
+  'NOT NULL, PRIMARY KEY(hash,band));\n'
+  'CREATE INDEX IF NOT EXISTS band_lookup ON hash_bands(band,value);\n'
+  '\n'
+  'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);\n'
+  'CREATE TABLE IF NOT EXISTS users (id BIGINT PRIMARY KEY, menu BIGINT, pending TEXT,\n'
+  ' banned INTEGER NOT NULL DEFAULT 0, permanent INTEGER NOT NULL DEFAULT 0,\n'
+  ' ban_base INTEGER NOT NULL DEFAULT 0);\n'
+  'CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, chat BIGINT UNIQUE NOT NULL,\n'
+  " title TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'unset', description TEXT NOT NULL DEFAULT "
+  "'',\n"
+  ' goal INTEGER NOT NULL DEFAULT 5, price INTEGER NOT NULL DEFAULT 0,\n'
+  ' monthly INTEGER NOT NULL DEFAULT 0, locker INTEGER NOT NULL DEFAULT 0,\n'
+  " threshold INTEGER NOT NULL DEFAULT 100, slot TEXT NOT NULL DEFAULT '22-01',\n"
+  ' weekday INTEGER NOT NULL DEFAULT 2, opened INTEGER NOT NULL DEFAULT 0,\n'
+  " enabled INTEGER NOT NULL DEFAULT 0, rules TEXT NOT NULL DEFAULT '',\n"
+  ' anti INTEGER NOT NULL DEFAULT 0, last_open DOUBLE PRECISION NOT NULL DEFAULT 0);\n'
+  'CREATE TABLE IF NOT EXISTS access (uid BIGINT NOT NULL, gid TEXT NOT NULL,\n'
+  ' source TEXT NOT NULL, expires DOUBLE PRECISION, revoked INTEGER NOT NULL DEFAULT 0,\n'
+  ' base INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(uid,gid));\n'
+  'CREATE TABLE IF NOT EXISTS members (uid BIGINT NOT NULL, gid TEXT NOT NULL,\n'
+  ' present INTEGER NOT NULL DEFAULT 1, joined DOUBLE PRECISION NOT NULL,\n'
+  ' media DOUBLE PRECISION NOT NULL, warned INTEGER NOT NULL DEFAULT 0,\n'
+  ' PRIMARY KEY(uid,gid));\n'
+  'CREATE TABLE IF NOT EXISTS referrals (invitee BIGINT PRIMARY KEY, inviter BIGINT NOT NULL,\n'
+  ' joined DOUBLE PRECISION NOT NULL, present INTEGER NOT NULL DEFAULT 1,\n'
+  ' valid INTEGER NOT NULL DEFAULT 0);\n'
+  'CREATE TABLE IF NOT EXISTS links (url TEXT PRIMARY KEY, gid TEXT NOT NULL,\n'
+  ' uid BIGINT NOT NULL, purpose TEXT NOT NULL, expires DOUBLE PRECISION NOT NULL);\n'
+  'CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, uid BIGINT NOT NULL, gid TEXT NOT '
+  'NULL,\n'
+  ' amount INTEGER NOT NULL, monthly INTEGER NOT NULL, status TEXT NOT NULL,\n'
+  ' created DOUBLE PRECISION NOT NULL, invoice TEXT, charge TEXT UNIQUE);\n'
+  'CREATE UNIQUE INDEX IF NOT EXISTS one_pending ON orders(uid,gid) WHERE status IN '
+  "('pending','checkout');\n"
+  'CREATE TABLE IF NOT EXISTS messages (gid TEXT NOT NULL, mid BIGINT NOT NULL,\n'
+  ' uid BIGINT NOT NULL, album TEXT, file_id TEXT, created DOUBLE PRECISION NOT NULL,\n'
+  ' PRIMARY KEY(gid,mid));\n'
+  'CREATE TABLE IF NOT EXISTS notices (gid TEXT NOT NULL, kind TEXT NOT NULL,\n'
+  ' mid BIGINT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(gid,kind));\n'
+  'CREATE TABLE IF NOT EXISTS strikes (uid BIGINT PRIMARY KEY, count INTEGER NOT NULL);\n'
+  'CREATE TABLE IF NOT EXISTS reports (gid TEXT NOT NULL, target TEXT NOT NULL,\n'
+  ' reporter BIGINT NOT NULL, PRIMARY KEY(gid,target,reporter));\n'
+  'CREATE TABLE IF NOT EXISTS fingerprints (file_id TEXT PRIMARY KEY, blocked INTEGER NOT NULL '
+  'DEFAULT 0);\n'
+  'CREATE TABLE IF NOT EXISTS seen_media (gid TEXT NOT NULL, file_id TEXT NOT NULL, PRIMARY '
+  'KEY(gid,file_id));\n'
+  'CREATE TABLE IF NOT EXISTS proof_used (uid BIGINT NOT NULL, gid TEXT NOT NULL, PRIMARY '
+  'KEY(uid,gid));\n'
+  'CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, method TEXT NOT NULL, payload TEXT NOT '
+  'NULL,\n'
+  ' due DOUBLE PRECISION NOT NULL, attempts INTEGER NOT NULL DEFAULT 0);\n'
+  'CREATE TABLE IF NOT EXISTS sessions (day TEXT PRIMARY KEY, gid TEXT NOT NULL);\n'
+  'CREATE TABLE IF NOT EXISTS ads (id TEXT PRIMARY KEY, gid TEXT NOT NULL, text TEXT NOT NULL,\n'
+  ' photo TEXT, interval_hours INTEGER NOT NULL DEFAULT 4, enabled INTEGER NOT NULL DEFAULT 1,\n'
+  ' next_at DOUBLE PRECISION NOT NULL DEFAULT 0);\n'
+  'CREATE TABLE IF NOT EXISTS processed (id BIGINT PRIMARY KEY);\n'
+  'CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, actor BIGINT NOT NULL,\n'
+  ' action TEXT NOT NULL, created DOUBLE PRECISION NOT NULL);\n'),
+ ('002_manual_payments.sql',
+  'CREATE TABLE IF NOT EXISTS payment_prices (gid TEXT NOT NULL, method TEXT NOT NULL, cents '
+  'INTEGER NOT NULL, PRIMARY KEY(gid,method));\n'
+  'CREATE TABLE IF NOT EXISTS manual_orders (id TEXT PRIMARY KEY, uid BIGINT NOT NULL, gid TEXT '
+  'NOT NULL, method TEXT NOT NULL, currency TEXT NOT NULL, base INTEGER NOT NULL, fee INTEGER NOT '
+  'NULL, total INTEGER NOT NULL, destination TEXT NOT NULL, monthly INTEGER NOT NULL, status TEXT '
+  'NOT NULL, created DOUBLE PRECISION NOT NULL, proof_id TEXT, proof_unique TEXT, proof_kind TEXT, '
+  'reviewed_by BIGINT, reviewed_at DOUBLE PRECISION);\n'
+  'CREATE UNIQUE INDEX IF NOT EXISTS manual_pending ON manual_orders(uid,gid) WHERE status IN '
+  "('awaiting_proof','review');\n"
+  'CREATE UNIQUE INDEX IF NOT EXISTS manual_unique_proof ON manual_orders(proof_unique) WHERE '
+  'proof_unique IS NOT NULL;\n'))
+
+EXPECTED = {'access': {'columns': [{'name': 'uid', 'type': 'BIGINT'},
+                        {'name': 'gid', 'type': 'TEXT'},
+                        {'name': 'source', 'type': 'TEXT'},
+                        {'name': 'expires', 'type': 'DOUBLE PRECISION'},
+                        {'name': 'revoked', 'type': 'INTEGER'},
+                        {'name': 'base', 'type': 'INTEGER'}]},
+ 'ads': {'columns': [{'name': 'id', 'type': 'TEXT'},
+                     {'name': 'gid', 'type': 'TEXT'},
+                     {'name': 'text', 'type': 'TEXT'},
+                     {'name': 'photo', 'type': 'TEXT'},
+                     {'name': 'interval_hours', 'type': 'INTEGER'},
+                     {'name': 'enabled', 'type': 'INTEGER'},
+                     {'name': 'next_at', 'type': 'DOUBLE PRECISION'}]},
+ 'audit': {'columns': [{'name': 'id', 'type': 'TEXT'},
+                       {'name': 'actor', 'type': 'BIGINT'},
+                       {'name': 'action', 'type': 'TEXT'},
+                       {'name': 'created', 'type': 'DOUBLE PRECISION'}]},
+ 'fingerprints': {'columns': [{'name': 'file_id', 'type': 'TEXT'}, {'name': 'blocked', 'type': 'INTEGER'}]},
+ 'groups': {'columns': [{'name': 'id', 'type': 'TEXT'},
+                        {'name': 'chat', 'type': 'BIGINT'},
+                        {'name': 'title', 'type': 'TEXT'},
+                        {'name': 'role', 'type': 'TEXT'},
+                        {'name': 'description', 'type': 'TEXT'},
+                        {'name': 'goal', 'type': 'INTEGER'},
+                        {'name': 'price', 'type': 'INTEGER'},
+                        {'name': 'monthly', 'type': 'INTEGER'},
+                        {'name': 'locker', 'type': 'INTEGER'},
+                        {'name': 'threshold', 'type': 'INTEGER'},
+                        {'name': 'slot', 'type': 'TEXT'},
+                        {'name': 'weekday', 'type': 'INTEGER'},
+                        {'name': 'opened', 'type': 'INTEGER'},
+                        {'name': 'enabled', 'type': 'INTEGER'},
+                        {'name': 'rules', 'type': 'TEXT'},
+                        {'name': 'anti', 'type': 'INTEGER'},
+                        {'name': 'last_open', 'type': 'DOUBLE PRECISION'}]},
+ 'hash_bands': {'columns': [{'name': 'hash', 'type': 'TEXT'},
+                            {'name': 'band', 'type': 'INTEGER'},
+                            {'name': 'value', 'type': 'TEXT'}]},
+ 'jobs': {'columns': [{'name': 'id', 'type': 'TEXT'},
+                      {'name': 'method', 'type': 'TEXT'},
+                      {'name': 'payload', 'type': 'TEXT'},
+                      {'name': 'due', 'type': 'DOUBLE PRECISION'},
+                      {'name': 'attempts', 'type': 'INTEGER'}]},
+ 'links': {'columns': [{'name': 'url', 'type': 'TEXT'},
+                       {'name': 'gid', 'type': 'TEXT'},
+                       {'name': 'uid', 'type': 'BIGINT'},
+                       {'name': 'purpose', 'type': 'TEXT'},
+                       {'name': 'expires', 'type': 'DOUBLE PRECISION'}]},
+ 'manual_orders': {'columns': [{'name': 'id', 'type': 'TEXT'},
+                               {'name': 'uid', 'type': 'BIGINT'},
+                               {'name': 'gid', 'type': 'TEXT'},
+                               {'name': 'method', 'type': 'TEXT'},
+                               {'name': 'currency', 'type': 'TEXT'},
+                               {'name': 'base', 'type': 'INTEGER'},
+                               {'name': 'fee', 'type': 'INTEGER'},
+                               {'name': 'total', 'type': 'INTEGER'},
+                               {'name': 'destination', 'type': 'TEXT'},
+                               {'name': 'monthly', 'type': 'INTEGER'},
+                               {'name': 'status', 'type': 'TEXT'},
+                               {'name': 'created', 'type': 'DOUBLE PRECISION'},
+                               {'name': 'proof_id', 'type': 'TEXT'},
+                               {'name': 'proof_unique', 'type': 'TEXT'},
+                               {'name': 'proof_kind', 'type': 'TEXT'},
+                               {'name': 'reviewed_by', 'type': 'BIGINT'},
+                               {'name': 'reviewed_at', 'type': 'DOUBLE PRECISION'}]},
+ 'media_files': {'columns': [{'name': 'file_id', 'type': 'TEXT'},
+                             {'name': 'sha', 'type': 'TEXT'},
+                             {'name': 'gid', 'type': 'TEXT'}]},
+ 'media_hashes': {'columns': [{'name': 'file_id', 'type': 'TEXT'}, {'name': 'hash', 'type': 'TEXT'}]},
+ 'media_tasks': {'columns': [{'name': 'id', 'type': 'TEXT'},
+                             {'name': 'gid', 'type': 'TEXT'},
+                             {'name': 'mid', 'type': 'BIGINT'},
+                             {'name': 'file_id', 'type': 'TEXT'},
+                             {'name': 'download_id', 'type': 'TEXT'},
+                             {'name': 'kind', 'type': 'TEXT'},
+                             {'name': 'due', 'type': 'DOUBLE PRECISION'},
+                             {'name': 'attempts', 'type': 'INTEGER'}]},
+ 'members': {'columns': [{'name': 'uid', 'type': 'BIGINT'},
+                         {'name': 'gid', 'type': 'TEXT'},
+                         {'name': 'present', 'type': 'INTEGER'},
+                         {'name': 'joined', 'type': 'DOUBLE PRECISION'},
+                         {'name': 'media', 'type': 'DOUBLE PRECISION'},
+                         {'name': 'warned', 'type': 'INTEGER'}]},
+ 'messages': {'columns': [{'name': 'gid', 'type': 'TEXT'},
+                          {'name': 'mid', 'type': 'BIGINT'},
+                          {'name': 'uid', 'type': 'BIGINT'},
+                          {'name': 'album', 'type': 'TEXT'},
+                          {'name': 'file_id', 'type': 'TEXT'},
+                          {'name': 'created', 'type': 'DOUBLE PRECISION'}]},
+ 'notices': {'columns': [{'name': 'gid', 'type': 'TEXT'},
+                         {'name': 'kind', 'type': 'TEXT'},
+                         {'name': 'mid', 'type': 'BIGINT'},
+                         {'name': 'body', 'type': 'TEXT'}]},
+ 'orders': {'columns': [{'name': 'id', 'type': 'TEXT'},
+                        {'name': 'uid', 'type': 'BIGINT'},
+                        {'name': 'gid', 'type': 'TEXT'},
+                        {'name': 'amount', 'type': 'INTEGER'},
+                        {'name': 'monthly', 'type': 'INTEGER'},
+                        {'name': 'status', 'type': 'TEXT'},
+                        {'name': 'created', 'type': 'DOUBLE PRECISION'},
+                        {'name': 'invoice', 'type': 'TEXT'},
+                        {'name': 'charge', 'type': 'TEXT'}]},
+ 'payment_prices': {'columns': [{'name': 'gid', 'type': 'TEXT'},
+                                {'name': 'method', 'type': 'TEXT'},
+                                {'name': 'cents', 'type': 'INTEGER'}]},
+ 'processed': {'columns': [{'name': 'id', 'type': 'BIGINT'}]},
+ 'proof_used': {'columns': [{'name': 'uid', 'type': 'BIGINT'}, {'name': 'gid', 'type': 'TEXT'}]},
+ 'referrals': {'columns': [{'name': 'invitee', 'type': 'BIGINT'},
+                           {'name': 'inviter', 'type': 'BIGINT'},
+                           {'name': 'joined', 'type': 'DOUBLE PRECISION'},
+                           {'name': 'present', 'type': 'INTEGER'},
+                           {'name': 'valid', 'type': 'INTEGER'}]},
+ 'reports': {'columns': [{'name': 'gid', 'type': 'TEXT'},
+                         {'name': 'target', 'type': 'TEXT'},
+                         {'name': 'reporter', 'type': 'BIGINT'}]},
+ 'seen_media': {'columns': [{'name': 'gid', 'type': 'TEXT'}, {'name': 'file_id', 'type': 'TEXT'}]},
+ 'sessions': {'columns': [{'name': 'day', 'type': 'TEXT'}, {'name': 'gid', 'type': 'TEXT'}]},
+ 'settings': {'columns': [{'name': 'key', 'type': 'TEXT'}, {'name': 'value', 'type': 'TEXT'}]},
+ 'strikes': {'columns': [{'name': 'uid', 'type': 'BIGINT'}, {'name': 'count', 'type': 'INTEGER'}]},
+ 'users': {'columns': [{'name': 'id', 'type': 'BIGINT'},
+                       {'name': 'menu', 'type': 'BIGINT'},
+                       {'name': 'pending', 'type': 'TEXT'},
+                       {'name': 'banned', 'type': 'INTEGER'},
+                       {'name': 'permanent', 'type': 'INTEGER'},
+                       {'name': 'ban_base', 'type': 'INTEGER'}]}}
+
 
 class SchemaMismatch(RuntimeError):
     pass
@@ -79,11 +285,11 @@ def migrate(db):
         actions=plan_repairs(db)
         for sql in actions: db.run(sql)
         db.run('CREATE TABLE IF NOT EXISTS network_schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at DOUBLE PRECISION NOT NULL)')
-        for path in sorted(ROOT.glob('*.sql')):
-            source=path.read_text(); checksum=hashlib.sha256(source.encode()).hexdigest()
-            previous=db.one('SELECT checksum FROM network_schema_migrations WHERE version=?',(path.name,))
+        for version, source in MIGRATIONS:
+            checksum=hashlib.sha256(source.encode()).hexdigest()
+            previous=db.one('SELECT checksum FROM network_schema_migrations WHERE version=?',(version,))
             if previous and previous['checksum']!=checksum:
-                raise SchemaMismatch('Migration modifiée après application : '+path.name)
+                raise SchemaMismatch('Migration modifiée après application : '+version)
             if previous: continue
             statements=[s.strip() for s in source.split(';') if s.strip()]
             # Create/verify all tables before creating any index that references a column.
@@ -92,7 +298,7 @@ def migrate(db):
                 except Exception as error:
                     # Report the DDL object, not raw connection details or row contents.
                     obj=re.search(r'(?:TABLE|INDEX) IF NOT EXISTS (\w+)',sql)
-                    raise SchemaMismatch('Échec migration '+path.name+' sur '+(obj.group(1) if obj else 'DDL')+
+                    raise SchemaMismatch('Échec migration '+version+' sur '+(obj.group(1) if obj else 'DDL')+
                                          ' ('+type(error).__name__+'). Transaction annulée ; lancer python -m app.db.doctor.') from None
-            db.run('INSERT INTO network_schema_migrations(version,checksum,applied_at) VALUES (?,?,?)',(path.name,checksum,time.time()))
+            db.run('INSERT INTO network_schema_migrations(version,checksum,applied_at) VALUES (?,?,?)',(version,checksum,time.time()))
         if inspect(db): raise SchemaMismatch('Schéma incompatible après migration ; transaction annulée.')
