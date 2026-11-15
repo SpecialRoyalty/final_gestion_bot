@@ -2,6 +2,8 @@ import html
 from urllib.parse import urlencode
 from app.utils.core import progress
 from app.keyboards.inline import button
+from app.keyboards.admin_groups import group_controls
+from app.utils.group_roles import ROLE_LABELS
 
 class Screens:
     def show(self, uid, page='home'):
@@ -65,18 +67,21 @@ class Screens:
         if page.startswith('a:'):
             g=self.group(page[2:])
             if not g or not self.admin(uid,g): return self.show(uid)
-            rows = [[button('Rôle : '+g['role'],'roles:'+g['id'])],
-                    [button('📝 Description','edit:'+g['id']+':description'),button('🎯 Objectif','edit:'+g['id']+':goal')],
-                    [button('💳 Tarifs','prices:'+g['id']),button('30 jours : '+str(bool(g['monthly'])),'toggle:'+g['id']+':monthly')],
-                    [button('🔒 Locker : '+('ON' if g['locker'] else 'OFF'),'toggle:'+g['id']+':locker'),button('Seuil : '+str(g['threshold']),'edit:'+g['id']+':threshold')],
-                    [button('🕐 '+g['slot'],'slots:'+g['id']),button('Jour gratuit : '+str(g['weekday']),'edit:'+g['id']+':weekday')],
-                    [button('📜 Règles','edit:'+g['id']+':rules'),button('Anti-repost : '+str(bool(g['anti'])),'toggle:'+g['id']+':anti')],
-                    [button('📣 Publicités','ads:'+g['id'])]]
-            if uid in self.owners:
-                rows += [[button('✅ Activer' if not g['enabled'] else '⏸ Désactiver','toggle:'+g['id']+':enabled')],
-                         [button('🔁 Remplacer le groupe Telegram','edit:'+g['id']+':chat')]]
-            rows += [[button('⬅️ Administration','admin' if uid in self.owners else 'home')]]
-            return self.screen(uid,f'<b>⚙️ {html.escape(g["title"])}</b>\nIdentifiant : {g["chat"]}\nModifications sauvegardées immédiatement.',rows)
+            rows=group_controls(g,uid in self.owners)
+            text=f'<b>⚙️ {html.escape(g["title"])}</b>\nType : {ROLE_LABELS.get(g["role"],g["role"])}\nIdentifiant : {g["chat"]}'
+            text+='\nÉtat : '+('🟢 Activé' if g['enabled'] else '⚪ Désactivé')
+            if g['role']=='portal':
+                published=self.db.one("SELECT mid FROM notices WHERE gid=? AND kind='portal'",(g['id'],))
+                text+='\nMessage : '+('publié' if published else 'pas encore publié')
+                if not g['enabled']: text+='\nAppuie sur « Activer et publier » pour afficher le portail dans le groupe.'
+                text+='\nLe portail fonctionne même sans groupe de chat.'
+                error=self.db.setting('portal_error:'+g['id'])
+                if error: text+='\n⚠️ '+html.escape(error)
+            elif g['role']=='always': text+='\nOuvert 24 h/24, sous réserve du locker.'
+            elif g['role']=='proof': text+='\nVisite de 10 minutes, une seule fois par personne.'
+            elif g['role']=='unset': text+='\nChoisis le rôle pour afficher les réglages correspondants.'
+            text+='\nModifications sauvegardées immédiatement.'
+            return self.screen(uid,text,rows)
         groups=self.db.all("SELECT * FROM groups WHERE enabled=1 AND role!='portal' ORDER BY title")
         rows=[[button(g['title']+(' · ✅' if self.entitled(uid,g) else ''),'g:'+g['id'])] for g in groups]
         text='<b>✨ Ton espace</b>\n\nChoisis ton prochain groupe.'

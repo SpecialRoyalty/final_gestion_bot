@@ -1,4 +1,5 @@
 import html
+from app.utils.group_roles import allows
 from app.services.payments import METHODS, money, cents, btn
 
 class PaymentScreens:
@@ -55,7 +56,7 @@ class PaymentScreens:
             self.screen(uid,'Envoie les coordonnées de réception. Un tiret désactive ce moyen.',[[btn('⬅️ Annuler','payconfig')]])
         elif action=='prices':
             g=self.group(parts[1])
-            if not g or not self.admin(uid,g): return True
+            if not g or not self.admin(uid,g) or not allows(g['role'],'prices'): return True
             rows=[]
             for method,(name,currency,fee) in METHODS.items():
                 p=self.db.one('SELECT cents FROM payment_prices WHERE gid=? AND method=?',(g['id'],method))
@@ -63,7 +64,7 @@ class PaymentScreens:
             self.screen(uid,'<b>Prix de base</b>\nLes 15 % sont ajoutés automatiquement pour PayPal et Revolut. USDT possède son propre montant.',rows+[[btn('⬅️ Retour','a:'+g['id'])]])
         elif action=='price':
             g=self.group(parts[1])
-            if not g or not self.admin(uid,g) or parts[2] not in METHODS: return True
+            if not g or not self.admin(uid,g) or not allows(g['role'],'prices') or parts[2] not in METHODS: return True
             self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
             self.screen(uid,'Envoie le prix de base, par exemple 10,50. Un tiret désactive ce tarif.',[[btn('⬅️ Annuler','prices:'+g['id'])]])
         else: return False
@@ -79,7 +80,7 @@ class PaymentScreens:
             self.payment_callback(uid,'payconfig'); return True
         if action=='price':
             g=self.group(parts[1])
-            if not g or not self.admin(uid,g): return True
+            if not g or not self.admin(uid,g) or not allows(g['role'],'prices'): return True
             method=parts[2]
             if text=='-': self.db.run('DELETE FROM payment_prices WHERE gid=? AND method=?',(g['id'],method))
             else:

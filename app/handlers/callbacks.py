@@ -1,6 +1,9 @@
+import html
+from app.services.telegram import APIError
 import time
 import uuid
 from app.utils.core import ROLES, SLOTS, active_access
+from app.utils.group_roles import allows, ROLE_LABELS
 from app.keyboards.inline import button, keyboard
 
 class Callbacks:
@@ -28,16 +31,29 @@ class Callbacks:
             prompt={'referral_rule':'Écris simple ou cascade.','unban_goal':'Envoie le nombre requis (1 à 10000).',
                     'words':'Envoie les termes interdits, un par ligne. Un tiret pour vider.'}[key]
             return self.screen(uid,prompt,[[button('⬅️ Annuler','admin')]])
-        if action in ('roles','role','slots','slot','toggle','edit','ads','adnew','adoff'):
+        if action in ('roles','role','slots','slot','toggle','edit','ads','adnew','adoff','publish'):
             g=self.group(parts[1])
             if not g or not self.admin(uid,g): return
+            feature={'slots':'slot','slot':'slot','ads':'ads','adnew':'ads','adoff':'ads'}.get(action)
+            if action in ('edit','toggle') and len(parts)>2 and parts[2] not in ('chat','enabled'):
+                feature=parts[2]
+            if feature and not allows(g['role'],feature): return self.show(uid,'a:'+g['id'])
+            if action=='publish':
+                if g['role']=='portal' and g['enabled']: self.publish_portal(g,force=True)
+                return self.show(uid,'a:'+g['id'])
             if action=='roles':
-                return self.screen(uid,'<b>Type de groupe</b>',[[button(r,'role:'+g['id']+':'+r)] for r in ROLES])
+                return self.screen(uid,'<b>Type de groupe</b>',[[button(ROLE_LABELS[r],'role:'+g['id']+':'+r)] for r in ROLES])
             if action=='role':
                 if parts[2] not in ROLES or uid not in self.owners: return
                 if parts[2]=='portal' and self.db.one("SELECT 1 FROM groups WHERE role='portal' AND id!=?",(g['id'],)):
                     return self.screen(uid,'Un seul portail est autorisé. Remplace le portail existant depuis sa fiche.',[[button('⬅️ Retour','a:'+g['id'])]])
-                self.db.run('UPDATE groups SET role=? WHERE id=?',(parts[2],g['id']))
+                if parts[2]!=g['role']:
+                    # Changing role requires explicit activation with its new configuration.
+                    if g['enabled']:
+                        self.permissions(g,False)
+                        if g['role']=='portal': self.remove_notice(g,'portal')
+                    self.db.run('UPDATE groups SET role=?,enabled=0,opened=0 WHERE id=?',(parts[2],g['id']))
+                    self.db.set('locked:'+g['id'],'')
             if action=='slots':
                 return self.screen(uid,'<b>Créneau quotidien</b>',[[button(s,'slot:'+g['id']+':'+s)] for s in SLOTS])
             if action=='slot' and parts[2] in SLOTS:
@@ -50,12 +66,18 @@ class Callbacks:
                     if not g['enabled']:
                         if g['role']=='unset' or (g['role']=='vip' and (not g['description'].strip() or not self.payment_options(g['id']))):
                             return self.screen(uid,'Complète le rôle, et pour un VIP la description et le prix.',[[button('⬅️ Retour','a:'+g['id'])]])
-                        self.check_rights(g)
+                        try:
+                            self.check_rights(g)
+                        except (ValueError,APIError) as error:
+                            return self.screen(uid,'⚠️ Activation impossible : '+html.escape(str(error)),[[button('⬅️ Retour','a:'+g['id'])]])
                     else:
-                        self.permissions(g,False)
+                        if g['role']=='portal': self.remove_notice(g,'portal')
+                        else: self.permissions(g,False)
                         self.db.run('UPDATE groups SET opened=0 WHERE id=?',(g['id'],))
                         self.db.set('locked:'+g['id'],'')
                 self.db.run(f'UPDATE groups SET {field}=? WHERE id=?',(1-g[field],g['id']))
+                if field=='enabled' and not g['enabled'] and g['role']=='portal':
+                    self.publish_portal(self.group(g['id']),force=True)
             if action=='edit':
                 field=parts[2]
                 if field not in ('description','goal','price','threshold','rules','weekday','chat'): return
@@ -91,6 +113,7 @@ class Callbacks:
             g=self.group(parts[1])
             if not g or not self.admin(uid,g): return
             if action=='adnew':
+                if not allows(g['role'],'ads'): return self.show(uid,'a:'+g['id'])
                 hours,sep,body=value.partition('\n')
                 if hours not in ('2','4','6','12') or not body: raise ValueError('Première ligne : 2, 4, 6 ou 12. Puis le texte.')
                 photo=m['photo'][-1]['file_id'] if m.get('photo') else None
@@ -99,6 +122,7 @@ class Callbacks:
                             (uuid.uuid4().hex,g['id'],body,photo,int(hours)))
             else:
                 field=parts[2]
+                if field!='chat' and not allows(g['role'],field): return self.show(uid,'a:'+g['id'])
                 if field in ('goal','price','threshold','weekday'):
                     if not value.isdigit(): raise ValueError('Envoie un nombre entier positif.')
                     value=int(value)
@@ -125,6 +149,7 @@ class Callbacks:
                 elif field not in ('description','rules'): return
                 elif len(value)>2500: raise ValueError('Maximum 2500 caractères.')
                 if field!='chat': self.db.run(f'UPDATE groups SET {field}=? WHERE id=?',(value,g['id']))
+            if g['role']=='portal' and g['enabled']: self.publish_portal(self.group(g['id']),force=True)
             page='a:'+g['id']
         self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
         self.show(uid,page)
