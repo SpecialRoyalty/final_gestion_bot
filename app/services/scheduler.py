@@ -20,7 +20,19 @@ class Scheduler:
         body=json.dumps([text,rows,photo],ensure_ascii=False)
         prefix='notice:'+g['id']+':'+kind
         verified=float(self.db.setting(prefix+':verified','0'))
-        if old and old['body']==body and not force and (kind=='status' or time.time()-verified<300): return
+        if old and old['body']==body and not force:
+            if time.time()-verified<60: return
+            try:
+                # A same-keyboard edit probes existence without changing text or posting again.
+                self.api.call('editMessageReplyMarkup',chat_id=g['chat'],message_id=old['mid'],reply_markup=keyboard(*rows))
+            except APIError as error:
+                if 'message is not modified' in str(error): pass
+                elif 'message to edit not found' in str(error):
+                    self.db.run('DELETE FROM notices WHERE gid=? AND kind=?',(g['id'],kind))
+                    old=None
+                else: raise
+            self.db.set(prefix+':verified',time.time())
+            if old: return
         if old and kind=='status':
             try:
                 self.api.call('deleteMessage',chat_id=g['chat'],message_id=old['mid'])
