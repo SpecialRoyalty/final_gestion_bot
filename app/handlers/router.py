@@ -1,4 +1,6 @@
 import html
+import time
+from app.services.monitoring import safe_error
 import uuid
 from app.keyboards.inline import button
 
@@ -25,10 +27,19 @@ class Router:
         text=m.get('text','')
         if text.startswith('/paysupport') or text.startswith('/support'):
             return self.screen(uid,'Assistance : '+html.escape(self.support),[[button('⬅️ Accueil','home')]])
-        if text.startswith('/start'):
+        command=text.split(maxsplit=1)[0] if text.strip() else ''
+        if command.split('@')[0]=='/start' and ('@' not in command or command.split('@',1)[1].casefold()==self.me['username'].casefold()):
             self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
-            arg=text.partition(' ')[2]
-            return self.show(uid,'g:'+arg[2:] if arg.startswith('g_') else ('invite' if arg=='invite' else 'home'))
+            self.db.set('start:received',time.time())
+            arg=text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1))>1 else ''
+            try:
+                result=self.show(uid,'g:'+arg[2:] if arg.startswith('g_') else ('invite' if arg=='invite' else 'home'))
+                self.db.set('start:rendered',time.time())
+                self.db.set('start:error','')
+                return result
+            except Exception as error:
+                self.db.set('start:error',safe_error(error))
+                raise
         if user['pending']: return self.input(uid,m,user['pending'])
         return self.show(uid)
 

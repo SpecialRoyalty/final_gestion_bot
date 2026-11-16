@@ -65,6 +65,7 @@ class Screens:
             rows = [[button(('✅ ' if g['enabled'] else '⚙️ ')+g['title'],'a:'+g['id'])]
                     for g in self.db.all('SELECT * FROM groups ORDER BY title')]
             rows += [[button('📊 Statistiques','stats:7'),button('🩺 État du réseau','health')],
+                     [button('⚙️ Configuration','configuration')],
                      [button('🔗 Règle invitations','setting:referral_rule'),button('🔓 Débannissement','setting:unban_goal')],
                      [button('💳 Paiements','payments'),button('⚙️ Moyens de paiement','payconfig')],
                      [button('🚫 Mots interdits','setting:words')],[button('⬅️ Accueil','home')]]
@@ -85,6 +86,8 @@ class Screens:
             elif g['role']=='always': text+='\nOuvert 24 h/24, sous réserve du locker.'
             elif g['role']=='proof': text+='\nVisite de 10 minutes, une seule fois par personne.'
             elif g['role']=='unset': text+='\nChoisis le rôle pour afficher les réglages correspondants.'
+            if g['role'] in ('chat','always','vip') and not self.payment_options(g['id']):
+                text+='\n⚠️ Paiement indisponible : configure au moins un tarif et ses coordonnées de réception.'
             text+='\nModifications sauvegardées immédiatement.'
             return self.screen(uid,text,rows)
         groups=self.db.all("SELECT * FROM groups WHERE enabled=1 AND role!='portal' ORDER BY title")
@@ -98,7 +101,11 @@ class Screens:
         if uid in self.owners: rows += [[button('🛠 Administration','admin')]]
         else:
             for g in groups:
-                if self.admin(uid,g): rows += [[button('⚙️ Gérer '+g['title'],'a:'+g['id'])]]
+                try:
+                    if self.admin(uid,g): rows += [[button('⚙️ Gérer '+g['title'],'a:'+g['id'])]]
+                except Exception as error:
+                    self.record_failure('admin_lookup:'+g['id'],error)
+        text+='\n\n<i>Accueil actualisé le '+self.time_label(time.time())+'</i>'
         rows += [[button('🔄 Actualiser','home')]]
         return self.screen(uid,text,rows)
 

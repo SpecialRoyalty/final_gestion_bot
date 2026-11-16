@@ -13,6 +13,7 @@ class Callbacks:
         if q.get('message',{}).get('chat',{}).get('id')!=uid: return
         if self.user(uid)['permanent']: return self.show(uid)
         self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
+        if self.readiness_callback(uid,data): return
         if self.monitoring_callback(uid,data): return
         if self.payment_callback(uid,data): return
         parts=data.split(':'); action=parts[0]
