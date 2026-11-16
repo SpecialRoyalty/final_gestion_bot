@@ -1,6 +1,7 @@
 """Manual external payment review. Amounts are stored as integer cents, never floats."""
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from app.utils.group_roles import allows
+import html
 import time
 import uuid
 
@@ -41,7 +42,11 @@ class ManualPayments:
             name,currency,fee=METHODS[p['method']]
             rows.append([btn(f'{name} — {money(total(p["cents"],fee),currency)}'+(' (+15 % inclus)' if fee else ''),f'method:{gid}:{p["method"]}')])
         rows.append([btn('⬅️ Retour','g:'+gid)])
-        self.screen(uid,'<b>💳 Choisis ton moyen de paiement</b>\n\n'+('Les prix affichés incluent les suppléments.' if len(rows)>1 else 'Aucun moyen de paiement disponible pour le moment.'),rows)
+        description=''
+        if g['role'] in ('chat','always'):
+            description=self.db.setting('fastpass_description','Accède à ce groupe sans compléter l’objectif d’invitations. Choisis ton moyen de paiement, envoie ta capture puis attends la validation de l’administrateur.')
+        intro='<b>⚡ Accès coupe-file</b>\n\n'+html.escape(description)+'\n\n' if description else ''
+        self.screen(uid,intro+'<b>💳 Choisis ton moyen de paiement</b>\n\n'+('Les prix affichés incluent les suppléments.' if len(rows)>1 else 'Aucun moyen de paiement disponible pour le moment.'),rows)
 
     def payment_choose(self,uid,gid,method):
         if method not in METHODS: return
@@ -77,7 +82,7 @@ class ManualPayments:
             for owner in self.owners:
                 caption=f'Paiement à vérifier\nGroupe : {g["title"] if g else o["gid"]}\nUtilisateur : {uid}\n{METHODS[o["method"]][0]} : {money(o["total"],o["currency"])}\nRéférence : {oid}\nVérifier la réception réelle avant de valider.'
                 self.enqueue('sendPhoto' if kind=='photo' else 'sendDocument',dict(chat_id=owner,**{kind:media['file_id']},caption=caption[:1024],reply_markup={'inline_keyboard':[[btn('🔎 Examiner','review:'+oid)]]}))
-        self.payment_page(uid,oid)
+        self.refresh_panel(uid,lambda:self.payment_page(uid,oid))
 
     def payment_decide(self,uid,oid,approve):
         if uid not in self.owners: return

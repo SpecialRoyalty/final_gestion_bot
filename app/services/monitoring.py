@@ -77,7 +77,7 @@ class Monitoring:
                     checks.append('⚠️ Aucun message de portail enregistré')
                 if g['role']=='vip' and not self.payment_options(gid): checks.append('⚠️ Aucun moyen de paiement configuré')
                 if not any(check.startswith('⚠️') for check in checks): self.db.set('health:'+gid,time.time())
-                checks.append('Historique des membres incomplet si le bot était absent.')
+
             except Exception as error:
                 checks.append('⚠️ '+safe_error(error))
             self.db.set('diagnostics:'+gid,json.dumps({'at':time.time(),'checks':checks},ensure_ascii=False))
@@ -89,6 +89,7 @@ class Monitoring:
             stamp=float(self.db.setting(key,'0'))
             return ('🟢' if stamp and now-stamp<90 else '🔴')+' '+self.time_label(stamp)
         lines=['<b>🩺 État du réseau</b>',f'Fuseau : {html.escape(self.tz)}','Base de données : 🟢 accessible',
+               'ℹ️ Les statistiques historiques couvrent uniquement les événements reçus par le bot.',
                'Réception Telegram : '+pulse('poll:ok'),
                'Dernier cycle terminé : '+pulse('scheduler:completed'),
                'Traitement médias : '+pulse('media:heartbeat')]
@@ -127,7 +128,7 @@ class Monitoring:
             report=json.loads(self.db.setting('diagnostics:'+gid,'{}'))
             if report:
                 lines.append('Contrôles Telegram du '+self.time_label(report['at']))
-                lines.extend(html.escape(x) for x in report['checks'])
+                lines.extend(html.escape(x) for x in report['checks'] if x!='Historique des membres incomplet si le bot était absent.')
             else: lines.append('Contrôles Telegram détaillés : pas encore exécutés.')
         rows=[[button('⚙️ Compléter la configuration','configuration')],[button('🔎 Vérifier les groupes','healthrun')],[button('🔄 Actualiser','health:'+str(page))]]
         if pages>1: rows.append([button('◀️','health:'+str(max(0,page-1))),button(f'{page+1}/{pages} ▶️','health:'+str(min(pages-1,page+1)))])

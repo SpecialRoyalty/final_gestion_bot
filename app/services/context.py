@@ -10,6 +10,7 @@ class Context:
         self.db, self.api, self.owners, self.tz, self.support = db, api, set(owners), tz, support
         self.me = api.call('getMe')
         self.last_tick = 0
+        self._fresh_panels=set()
         if not self.db.setting('metrics:since'): self.db.set('metrics:since',time.time())
 
     def install_command_menu(self):
@@ -50,11 +51,18 @@ class Context:
         self.db.run('INSERT INTO jobs(id,method,payload,due) VALUES (?,?,?,?)',
                     (uuid.uuid4().hex, method, json.dumps(payload), due or time.time()))
 
+    def refresh_panel(self,uid,render):
+        self._fresh_panels.add(uid)
+        try: return render()
+        finally: self._fresh_panels.discard(uid)
+
     def screen(self, uid, text, rows):
         user = self.user(uid)
         data = dict(chat_id=uid, text=text, parse_mode='HTML', reply_markup=keyboard(*rows),
                     link_preview_options={'is_disabled': True})
-        if user['menu']:
+        old_menu=user['menu']
+        fresh=uid in self._fresh_panels
+        if old_menu and not fresh:
             try:
                 self.api.call('editMessageText', message_id=user['menu'], **data)
                 return
@@ -64,6 +72,13 @@ class Context:
                     raise
         result = self.api.call('sendMessage', **data)
         self.db.run('UPDATE users SET menu=? WHERE id=?', (result['message_id'], uid))
+        if old_menu and old_menu!=result['message_id']:
+            try:
+                self.api.call('deleteMessage',chat_id=uid,message_id=old_menu)
+            except Exception as error:
+                # Keep a working new panel if Telegram cannot delete an old message.
+                self.enqueue('editMessageReplyMarkup',dict(chat_id=uid,message_id=old_menu,reply_markup={'inline_keyboard':[]}))
+                self.record_failure('panel_cleanup',error)
 
     def count(self, uid):
         return self.db.one('SELECT COUNT(*) AS n FROM referrals WHERE inviter=? AND valid=1', (uid,))['n']
