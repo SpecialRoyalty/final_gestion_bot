@@ -92,6 +92,13 @@ class Monitoring:
                'Réception Telegram : '+pulse('poll:ok'),
                'Dernier cycle terminé : '+pulse('scheduler:completed'),
                'Traitement médias : '+pulse('media:heartbeat')]
+        config=self.configuration_summary()
+        lines.insert(1,f'Configuration : {config["percent"]} % ({config["done"]}/{config["total"]} critères)')
+        lines.insert(2,'Ce pourcentage ne mesure pas le fonctionnement technique.')
+        lines.append('Dernier /start reçu : '+self.time_label(self.db.setting('start:received')))
+        lines.append('Dernier /start affiché : '+self.time_label(self.db.setting('start:rendered')))
+        start_error=self.db.setting('start:error')
+        if start_error: lines.append('⚠️ /start : '+html.escape(start_error))
         main_error=self.db.setting('main:error')
         if main_error and float(self.db.setting('main:error_at','0'))>float(self.db.setting('poll:ok','0')):
             lines.append('⚠️ Réception : '+html.escape(main_error))
@@ -108,9 +115,11 @@ class Monitoring:
         opens=self.db.one("SELECT COUNT(*) AS n FROM groups WHERE role='chat' AND opened=1")['n']
         if opens>1: lines.append('🔴 Plusieurs groupes classiques sont marqués ouverts.')
         groups=self.db.all('SELECT * FROM groups ORDER BY title')
-        pages=max(1,(len(groups)+2)//3); page=min(page,pages-1)
-        for g in groups[page*3:page*3+3]:
+        pages=max(1,(len(groups)+1)//2); page=min(page,pages-1)
+        for g in groups[page*2:page*2+2]:
             gid=g['id']; lines.append('\n<b>'+html.escape(g['title'])+'</b> · '+('actif' if g['enabled'] else 'désactivé'))
+            missing=[c['label'] for c in self.configuration_checks(g) if not c['ok']]
+            if missing: lines.append('⚠️ À configurer : '+html.escape(', '.join(missing)))
             lines.append('Contrôle du planning : '+self.time_label(self.db.setting('group:'+gid+':ok')))
             lines.append('Annonce modifiée : '+self.time_label(self.db.setting('notice:'+gid+':status:changed')))
             error=self.db.setting('group:'+gid+':error') or self.db.setting('announce:'+gid+':error') or self.db.setting('portal_error:'+gid)
@@ -120,7 +129,7 @@ class Monitoring:
                 lines.append('Contrôles Telegram du '+self.time_label(report['at']))
                 lines.extend(html.escape(x) for x in report['checks'])
             else: lines.append('Contrôles Telegram détaillés : pas encore exécutés.')
-        rows=[[button('🔎 Vérifier les groupes','healthrun')],[button('🔄 Actualiser','health:'+str(page))]]
+        rows=[[button('⚙️ Compléter la configuration','configuration')],[button('🔎 Vérifier les groupes','healthrun')],[button('🔄 Actualiser','health:'+str(page))]]
         if pages>1: rows.append([button('◀️','health:'+str(max(0,page-1))),button(f'{page+1}/{pages} ▶️','health:'+str(min(pages-1,page+1)))])
         rows.append([button('⬅️ Administration','admin')])
         self.screen(uid,'\n'.join(lines),rows)

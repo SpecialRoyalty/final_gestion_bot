@@ -12,6 +12,16 @@ class Context:
         self.last_tick = 0
         if not self.db.setting('metrics:since'): self.db.set('metrics:since',time.time())
 
+    def install_command_menu(self):
+        try:
+            self.api.call('setMyCommands',scope={'type':'all_private_chats'},commands=[
+                {'command':'start','description':'Ouvrir ou retrouver mon espace'},
+                {'command':'support','description':'Contacter le support'}])
+            self.api.call('setChatMenuButton',menu_button={'type':'commands'})
+            self.db.set('commands:error','')
+        except Exception as error:
+            self.record_failure('commands',error)
+
     def user(self, uid):
         self.db.run('INSERT INTO users(id) VALUES (?) ON CONFLICT(id) DO NOTHING', (uid,))
         return self.db.one('SELECT * FROM users WHERE id=?', (uid,))
