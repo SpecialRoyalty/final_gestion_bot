@@ -20,7 +20,14 @@ class Scheduler:
         body=json.dumps([text,rows,photo],ensure_ascii=False)
         prefix='notice:'+g['id']+':'+kind
         verified=float(self.db.setting(prefix+':verified','0'))
-        if old and old['body']==body and not force and time.time()-verified<300: return
+        if old and old['body']==body and not force and (kind=='status' or time.time()-verified<300): return
+        if old and kind=='status':
+            try:
+                self.api.call('deleteMessage',chat_id=g['chat'],message_id=old['mid'])
+            except APIError as error:
+                if 'message to delete not found' not in str(error): raise
+            self.db.run('DELETE FROM notices WHERE gid=? AND kind=?',(g['id'],kind))
+            old=None
         if photo and len(text.encode('utf-16-le'))//2>1024:
             raise ValueError('Texte du portail trop long pour accompagner une image ; raccourcis-le.')
         args=dict(chat_id=g['chat'],reply_markup=keyboard(*rows))
@@ -99,12 +106,12 @@ class Scheduler:
         self.permissions(g,False)
         with self.db.transaction():
             items=self.db.all('SELECT mid FROM messages WHERE gid=?',(g['id'],))
-            items += self.db.all('SELECT mid FROM notices WHERE gid=?',(g['id'],))
+            items += self.db.all("SELECT mid FROM notices WHERE gid=? AND kind!='status'",(g['id'],))
             mids=sorted({r['mid'] for r in items})
             for start in range(0,len(mids),100):
                 self.enqueue('deleteMessages',dict(chat_id=g['chat'],message_ids=mids[start:start+100]))
             self.db.run('DELETE FROM messages WHERE gid=?',(g['id'],))
-            self.db.run('DELETE FROM notices WHERE gid=?',(g['id'],))
+            self.db.run("DELETE FROM notices WHERE gid=? AND kind!='status'",(g['id'],))
             self.db.run('UPDATE groups SET opened=0 WHERE id=?',(g['id'],))
 
     def scheduled(self,groups,now):
@@ -219,12 +226,12 @@ class Scheduler:
                     elif g['opened'] and active:
                         remaining=active[1]-now
                         message='🟢 Groupe ouvert, vous pouvez envoyer textes, photos et vidéos.'
-                        if remaining<=1800: message+='\nFermeture dans '+countdown(remaining)+'.'
+                        if remaining<=1800: message+='\nFermeture dans '+countdown(remaining,closing=True)+'.'
                         message+='\nHeure de fermeture : '+datetime.fromtimestamp(active[1],ZoneInfo(self.tz)).strftime('%H:%M')+' ('+self.tz+').'
                         self.notice(g,'status',message,[invite])
                     elif not g['opened']:
                         future=[a for a,b in spans if a>now]
-                        message='🔴 Groupe fermé.'+(' Ouverture dans '+countdown(min(future)-now)+'.' if future else ' Prochaine ouverture annoncée ici.')
+                        message='🔴 Groupe fermé.'+(' Ouverture dans '+countdown(min(future)-now,weekly=g['role']=='free')+'.' if future else ' Prochaine ouverture annoncée ici.')
                         if future: message+='\nPrévue le '+datetime.fromtimestamp(min(future),ZoneInfo(self.tz)).strftime('%d/%m à %H:%M')+' ('+self.tz+').'
                         self.notice(g,'status',message,[invite])
                     if g['opened'] and g['rules']:
@@ -267,7 +274,7 @@ class Scheduler:
                     self.db.run('UPDATE members SET present=0 WHERE uid=? AND gid=?',(m['uid'],g['id']))
                     self.db.run('UPDATE access SET revoked=1,base=? WHERE uid=? AND gid=?',(self.count(m['uid']),m['uid'],g['id']))
             elif not m['warned']:
-                self.enqueue('sendMessage',dict(chat_id=m['uid'],text='⚠️ Partage un média dans '+g['title']+' avant demain pour conserver ton accès.'))
+                self.enqueue('sendMessage',dict(chat_id=m['uid'],text=self.tr(m['uid'],'⚠️ Partage un média dans ')+g['title']+self.tr(m['uid'],' avant demain pour conserver ton accès.')))
                 self.db.run('UPDATE members SET warned=1 WHERE uid=? AND gid=?',(m['uid'],g['id']))
 
     def task_ads(self,now):

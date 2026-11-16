@@ -40,13 +40,13 @@ class ManualPayments:
         rows=[]
         for p in self.payment_options(gid):
             name,currency,fee=METHODS[p['method']]
-            rows.append([btn(f'{name} — {money(total(p["cents"],fee),currency)}'+(' (+15 % inclus)' if fee else ''),f'method:{gid}:{p["method"]}')])
-        rows.append([btn('⬅️ Retour','g:'+gid)])
+            rows.append([btn(f'{name} — {money(total(p["cents"],fee),currency)}'+(self.tr(uid,' (+15 % inclus)') if fee else ''),f'method:{gid}:{p["method"]}')])
+        rows.append([btn(self.tr(uid,'⬅️ Retour'),'g:'+gid)])
         description=''
         if g['role'] in ('chat','always'):
-            description=self.db.setting('fastpass_description','Accède à ce groupe sans compléter l’objectif d’invitations. Choisis ton moyen de paiement, envoie ta capture puis attends la validation de l’administrateur.')
-        intro='<b>⚡ Accès coupe-file</b>\n\n'+html.escape(description)+'\n\n' if description else ''
-        self.screen(uid,intro+'<b>💳 Choisis ton moyen de paiement</b>\n\n'+('Les prix affichés incluent les suppléments.' if len(rows)>1 else 'Aucun moyen de paiement disponible pour le moment.'),rows)
+            description=self.db.setting('fastpass_description:'+self.language(uid),self.db.setting('fastpass_description') if self.language(uid)=='fr' else '') or (self.tr(uid,'Accède à ce groupe sans compléter l’objectif d’invitations. Choisis ton moyen de paiement, envoie ta capture puis attends la validation de l’administrateur.'))
+        intro=self.tr(uid,'<b>⚡ Accès coupe-file</b>\n\n')+html.escape(description)+'\n\n' if description else ''
+        self.screen(uid,intro+self.tr(uid,'<b>💳 Choisis ton moyen de paiement</b>\n\n')+(self.tr(uid,'Les prix affichés incluent les suppléments.') if len(rows)>1 else self.tr(uid,'Aucun moyen de paiement disponible pour le moment.')),rows)
 
     def payment_choose(self,uid,gid,method):
         if method not in METHODS: return
@@ -69,11 +69,11 @@ class ManualPayments:
         if not o or o['status']!='awaiting_proof': return self.payment_page(uid,oid)
         media=m['photo'][-1] if m.get('photo') else m.get('document')
         if not media or (not m.get('photo') and media.get('mime_type') not in ('image/jpeg','image/png')):
-            raise ValueError('Envoie une capture d’écran en photo, PNG ou JPEG.')
-        if media.get('file_size',0)>10*1024*1024: raise ValueError('La preuve doit faire moins de 10 Mio.')
+            raise ValueError(self.tr(uid,'Envoie une capture d’écran en photo, PNG ou JPEG.'))
+        if media.get('file_size',0)>10*1024*1024: raise ValueError(self.tr(uid,'La preuve doit faire moins de 10 Mio.'))
         unique=media['file_unique_id']
         if self.db.one('SELECT id FROM manual_orders WHERE proof_unique=?',(unique,)):
-            raise ValueError('Cette preuve a déjà été utilisée. Contacte le support pour la faire vérifier.')
+            raise ValueError(self.tr(uid,'Cette preuve a déjà été utilisée. Contacte le support pour la faire vérifier.'))
         kind='photo' if m.get('photo') else 'document'
         g=self.group(o['gid'])
         with self.db.transaction():
@@ -99,7 +99,7 @@ class ManualPayments:
                     status='approved'
             self.db.run('UPDATE manual_orders SET status=?,reviewed_by=?,reviewed_at=? WHERE id=?',(status,uid,time.time(),oid))
             self.db.run('INSERT INTO audit(id,actor,action,created) VALUES (?,?,?,?)',(uuid.uuid4().hex,uid,'payment:'+oid+':'+status,time.time()))
-            label={'approved':'✅ Ton paiement est validé. Ton accès est disponible.','rejected':'❌ Ta preuve de paiement a été refusée.','conflict':'Ton paiement nécessite une régularisation. Contacte le support.'}[status]
-            self.enqueue('sendMessage',dict(chat_id=o['uid'],text=label,reply_markup={'inline_keyboard':[[btn('Voir ma demande','paystatus:'+oid)]]}))
+            label={'approved':self.tr(o['uid'],'✅ Ton paiement est validé. Ton accès est disponible.'),'rejected':self.tr(o['uid'],'❌ Ta preuve de paiement a été refusée.'),'conflict':self.tr(o['uid'],'Ton paiement nécessite une régularisation. Contacte le support.')}[status]
+            self.enqueue('sendMessage',dict(chat_id=o['uid'],text=label,reply_markup={'inline_keyboard':[[btn(self.tr(o['uid'],'Voir ma demande'),'paystatus:'+oid)]]}))
         self.payment_review(uid,oid)
 

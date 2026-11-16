@@ -56,21 +56,40 @@ class Context:
         try: return render()
         finally: self._fresh_panels.discard(uid)
 
-    def screen(self, uid, text, rows):
+    def language(self,uid):
+        from app.utils.i18n import LANGUAGES
+        value=self.db.setting('language:'+str(uid),'fr')
+        return value if value in LANGUAGES else 'fr'
+
+    def tr(self,uid,text):
+        from app.utils.i18n import translate
+        return translate(self.language(uid),text)
+
+    def screen(self, uid, text, rows, photo=None):
         user = self.user(uid)
         data = dict(chat_id=uid, text=text, parse_mode='HTML', reply_markup=keyboard(*rows),
                     link_preview_options={'is_disabled': True})
+        old_photo=self.db.setting('menu_photo:'+str(uid))
+        if photo:
+            data.pop('text'); data.pop('link_preview_options')
+            data['caption']=text
         old_menu=user['menu']
         fresh=uid in self._fresh_panels
-        if old_menu and not fresh:
+        if old_menu and not fresh and bool(old_photo)==bool(photo):
             try:
-                self.api.call('editMessageText', message_id=user['menu'], **data)
+                if photo and old_photo!=photo:
+                    self.api.call('editMessageMedia',chat_id=uid,message_id=old_menu,
+                                  media={'type':'photo','media':photo,'caption':text,'parse_mode':'HTML'},reply_markup=keyboard(*rows))
+                else:
+                    self.api.call('editMessageCaption' if photo else 'editMessageText', message_id=old_menu, **data)
+                self.db.set('menu_photo:'+str(uid),photo or '')
                 return
             except APIError as e:
                 if 'message is not modified' in str(e): return
                 if not any(t in str(e) for t in ('message to edit not found', "message can't be edited")):
                     raise
-        result = self.api.call('sendMessage', **data)
+        result = self.api.call('sendPhoto',photo=photo,**data) if photo else self.api.call('sendMessage',**data)
+        self.db.set('menu_photo:'+str(uid),photo or '')
         self.db.run('UPDATE users SET menu=? WHERE id=?', (result['message_id'], uid))
         if old_menu and old_menu!=result['message_id']:
             try:

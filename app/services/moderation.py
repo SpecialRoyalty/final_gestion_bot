@@ -58,7 +58,7 @@ class Moderation:
                 else:
                     self.db.run('UPDATE referrals SET present=1,joined=? WHERE invitee=?',(time.time(),uid))
             elif g['role'] in ('chat','always'):
-                self.enqueue('sendMessage',dict(chat_id=uid,text='Bienvenue ! Partage régulièrement des photos ou vidéos pour conserver ton accès.'))
+                self.enqueue('sendMessage',dict(chat_id=uid,text=self.tr(uid,'Bienvenue ! Partage régulièrement des photos ou vidéos pour conserver ton accès.')))
         else:
             self.db.run('UPDATE members SET present=0 WHERE uid=? AND gid=?',(uid,g['id']))
             if g['role']=='portal': self.db.run('UPDATE referrals SET present=0 WHERE invitee=?',(uid,))
