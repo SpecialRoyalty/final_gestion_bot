@@ -1,0 +1,168 @@
+"""Operational diagnostics and measured statistics; no inferred payment confirmations."""
+import html
+import json
+import logging
+import re
+import time
+import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from app.keyboards.inline import button
+from app.services.payments import money
+
+
+def safe_error(error):
+    text=f'{type(error).__name__}: {error}'
+    text=re.sub(r'https?://\S+','[URL masquée]',text)
+    text=re.sub(r'\b\d{5,}:[A-Za-z0-9_-]+','[secret masqué]',text)
+    return text[:350]
+
+
+class Monitoring:
+    def metric(self,kind,uid=None,gid=None,key=None):
+        self.db.run('INSERT INTO metric_events(id,kind,uid,gid,created) VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
+                    (key or uuid.uuid4().hex,kind,uid,gid,time.time()))
+
+    def record_failure(self,key,error):
+        message=safe_error(error)
+        self.db.set(key+':error',message)
+        self.db.set(key+':error_at',time.time())
+        logging.warning('%s — %s',key,message)
+        self.alert(key+' : '+message)
+
+    def time_label(self,stamp):
+        return datetime.fromtimestamp(float(stamp),ZoneInfo(self.tz)).strftime('%d/%m %H:%M:%S') if stamp else 'jamais'
+
+    def monitoring_callback(self,uid,data):
+        if not (data=='health' or data=='healthrun' or data.startswith(('health:','stats:'))): return False
+        if uid not in self.owners: return True
+        if data.startswith('stats:'):
+            try: days=int(data.split(':')[1]); page=int(data.split(':')[2]) if data.count(':')>1 else 0
+            except ValueError: return True
+            if days in (1,7,30): self.show_stats(uid,days,max(page,0))
+        elif data=='healthrun':
+            groups=self.db.all('SELECT id FROM groups WHERE enabled=1 ORDER BY id')
+            if not self.db.setting('diagnostics:queue') or self.db.setting('diagnostics:queue')=='[]':
+                self.db.set('diagnostics:queue',json.dumps([g['id'] for g in groups]))
+                self.db.set('diagnostics:requested',time.time())
+            self.show_health(uid)
+        else:
+            try: page=int(data.split(':')[1]) if ':' in data else 0
+            except ValueError: return True
+            self.show_health(uid,max(0,page))
+        return True
+
+    def task_diagnostics(self,now):
+        queue=json.loads(self.db.setting('diagnostics:queue','[]'))
+        if not queue: return
+        gid=queue[0]; g=self.group(gid)
+        if g:
+            checks=[]
+            try:
+                self.check_rights(g)
+                checks.append('Droits administrateur : OK')
+                chat=self.api.call('getChat',chat_id=g['chat'])
+                count=max(0,self.api.call('getChatMemberCount',chat_id=g['chat'])-1)
+                self.db.set('member_count:'+gid,count)
+                checks.append(f'Membres présents (hors bot) : {count}')
+                if g['role'] in ('chat','free'):
+                    permissions=chat.get('permissions')
+                    if permissions is None: checks.append('Permissions d’envoi : non retournées par Telegram')
+                    elif bool(permissions.get('can_send_messages',False)) != bool(g['opened']):
+                        checks.append('⚠️ Permissions d’envoi incohérentes avec l’état ouvert/fermé')
+                    else: checks.append('Permissions d’envoi : cohérentes')
+                if g['role'] in ('chat','always','vip') and not g['description'].strip():
+                    checks.append('⚠️ Description manquante')
+                if g['role']=='portal' and not self.db.one("SELECT 1 FROM notices WHERE gid=? AND kind='portal'",(gid,)):
+                    checks.append('⚠️ Aucun message de portail enregistré')
+                if g['role']=='vip' and not self.payment_options(gid): checks.append('⚠️ Aucun moyen de paiement configuré')
+                if not any(check.startswith('⚠️') for check in checks): self.db.set('health:'+gid,time.time())
+                checks.append('Historique des membres incomplet si le bot était absent.')
+            except Exception as error:
+                checks.append('⚠️ '+safe_error(error))
+            self.db.set('diagnostics:'+gid,json.dumps({'at':time.time(),'checks':checks},ensure_ascii=False))
+        self.db.set('diagnostics:queue',json.dumps(queue[1:]))
+
+    def show_health(self,uid,page=0):
+        now=time.time(); self.db.one('SELECT 1 AS ok')
+        def pulse(key):
+            stamp=float(self.db.setting(key,'0'))
+            return ('🟢' if stamp and now-stamp<90 else '🔴')+' '+self.time_label(stamp)
+        lines=['<b>🩺 État du réseau</b>',f'Fuseau : {html.escape(self.tz)}','Base de données : 🟢 accessible',
+               'Réception Telegram : '+pulse('poll:ok'),
+               'Dernier cycle terminé : '+pulse('scheduler:completed'),
+               'Traitement médias : '+pulse('media:heartbeat')]
+        main_error=self.db.setting('main:error')
+        if main_error and float(self.db.setting('main:error_at','0'))>float(self.db.setting('poll:ok','0')):
+            lines.append('⚠️ Réception : '+html.escape(main_error))
+        failed=self.db.setting('scheduler:failed')
+        if failed: lines.append('⚠️ Tâches en erreur : '+html.escape(failed))
+        queue=json.loads(self.db.setting('diagnostics:queue','[]'))
+        if queue: lines.append(f'Vérifications Telegram en cours : {len(queue)} groupes restants.')
+        for label,table in (('Actions', 'jobs'),('Médias','media_tasks')):
+            count=self.db.one('SELECT COUNT(*) AS n FROM '+table)['n']
+            errors=self.db.one('SELECT COUNT(*) AS n FROM '+table+' WHERE attempts>0')['n']
+            lines.append(f'{label} en attente : {count} · en reprise : {errors}')
+        expired=self.db.one('SELECT COUNT(*) AS n FROM access WHERE revoked=0 AND expires IS NOT NULL AND expires<=?',(now,))['n']
+        if expired: lines.append(f'⚠️ {expired} accès expirés restent à révoquer.')
+        opens=self.db.one("SELECT COUNT(*) AS n FROM groups WHERE role='chat' AND opened=1")['n']
+        if opens>1: lines.append('🔴 Plusieurs groupes classiques sont marqués ouverts.')
+        groups=self.db.all('SELECT * FROM groups ORDER BY title')
+        pages=max(1,(len(groups)+2)//3); page=min(page,pages-1)
+        for g in groups[page*3:page*3+3]:
+            gid=g['id']; lines.append('\n<b>'+html.escape(g['title'])+'</b> · '+('actif' if g['enabled'] else 'désactivé'))
+            lines.append('Contrôle du planning : '+self.time_label(self.db.setting('group:'+gid+':ok')))
+            lines.append('Annonce modifiée : '+self.time_label(self.db.setting('notice:'+gid+':status:changed')))
+            error=self.db.setting('group:'+gid+':error') or self.db.setting('announce:'+gid+':error') or self.db.setting('portal_error:'+gid)
+            if error: lines.append('⚠️ '+html.escape(error))
+            report=json.loads(self.db.setting('diagnostics:'+gid,'{}'))
+            if report:
+                lines.append('Contrôles Telegram du '+self.time_label(report['at']))
+                lines.extend(html.escape(x) for x in report['checks'])
+            else: lines.append('Contrôles Telegram détaillés : pas encore exécutés.')
+        rows=[[button('🔎 Vérifier les groupes','healthrun')],[button('🔄 Actualiser','health:'+str(page))]]
+        if pages>1: rows.append([button('◀️','health:'+str(max(0,page-1))),button(f'{page+1}/{pages} ▶️','health:'+str(min(pages-1,page+1)))])
+        rows.append([button('⬅️ Administration','admin')])
+        self.screen(uid,'\n'.join(lines),rows)
+
+    def show_stats(self,uid,days=7,page=0):
+        now=time.time(); since=now-days*86400
+        count=lambda sql,args=(): self.db.one(sql,args)['n']
+        start=self.db.setting('metrics:since')
+        lines=[f'<b>📊 Statistiques · {days} jour(s)</b>',
+               'Événements mesurés depuis : '+self.time_label(start),
+               'Les données antérieures non enregistrées ne sont pas reconstituées.',
+               f'Utilisateurs connus : {count("SELECT COUNT(*) AS n FROM users")}',
+               f'Invitations validées (total) : {count("SELECT COUNT(*) AS n FROM referrals WHERE valid=1")}',
+               f'Invitations en attente : {count("SELECT COUNT(*) AS n FROM referrals WHERE valid=0 AND present=1")}',
+               f'Accès actifs maintenant : {count("SELECT COUNT(*) AS n FROM access a LEFT JOIN users u ON u.id=a.uid WHERE a.revoked=0 AND (a.expires IS NULL OR a.expires>?) AND COALESCE(u.banned,0)=0 AND COALESCE(u.permanent,0)=0",(now,))}']
+        validated=count("SELECT COUNT(*) AS n FROM metric_events WHERE kind='referral_valid' AND created>=?",(since,))
+        lines.append(f'Invitations validées enregistrées sur la période : {validated}')
+        pending=count("SELECT COUNT(*) AS n FROM manual_orders WHERE status='review'")
+        late=count("SELECT COUNT(*) AS n FROM manual_orders WHERE status='review' AND created<?",(now-86400,))
+        lines.append(f'Paiements à vérifier : {pending} · plus de 24 h : {late}')
+        for row in self.db.all("SELECT currency,SUM(total) AS amount,COUNT(*) AS n FROM manual_orders WHERE status='approved' AND reviewed_at>=? GROUP BY currency",(since,)):
+            lines.append(f'Validés par admin : {row["n"]} paiements · '+money(row['amount'],row['currency']))
+        groups=self.db.all("SELECT * FROM groups WHERE role!='unset' ORDER BY title")
+        pages=max(1,(len(groups)+2)//3);page=min(page,pages-1)
+        for g in groups[page*3:page*3+3]:
+            gid=g['id']
+            visitors=count("SELECT COUNT(DISTINCT uid) AS n FROM metric_events WHERE gid=? AND kind='view' AND created>=?",(gid,since))
+            joins=count("SELECT COUNT(*) AS n FROM metric_events WHERE gid=? AND kind='join' AND created>=?",(gid,since))
+            leaves=count("SELECT COUNT(*) AS n FROM metric_events WHERE gid=? AND kind='leave' AND created>=?",(gid,since))
+            active=count('SELECT COUNT(*) AS n FROM members WHERE gid=? AND present=1',(gid,))
+            grants=count("SELECT COUNT(DISTINCT uid) AS n FROM metric_events WHERE gid=? AND kind='grant' AND created>=?",(gid,since))
+            lines += ['\n<b>'+html.escape(g['title'])+'</b>',f'Visiteurs de la fiche : {visitors} · personnes ayant reçu un accès : {grants}',
+                      f'Entrées/sorties observées : +{joins} / −{leaves} · net {joins-leaves:+d}',
+                      f'Membres suivis présents : {active}']
+            advice=[]
+            if not g['description'].strip() and g['role'] in ('chat','always','vip'): advice.append('Compléter la description avant de promouvoir ce groupe.')
+            if visitors>=5 and grants==0: advice.append('Des personnes consultent la fiche sans accès accordé sur la période : examiner la description et l’objectif.')
+            if leaves>joins and leaves>=3: advice.append('Plus de sorties que d’entrées observées : examiner la participation et les horaires.')
+            if g['locker'] and not g['opened']: advice.append('Locker actif : consulter les contrôles pour comparer le seuil au nombre réel de membres.')
+            lines.extend('💡 '+a for a in advice)
+        if late: lines.append('\n💡 Traiter les paiements en attente de plus de 24 h avant d’augmenter la promotion.')
+        rows=[[button('24 h','stats:1'),button('7 jours','stats:7'),button('30 jours','stats:30')]]
+        if pages>1: rows.append([button('◀️',f'stats:{days}:{max(0,page-1)}'),button(f'{page+1}/{pages} ▶️',f'stats:{days}:{min(pages-1,page+1)}')])
+        rows += [[button('🔄 Actualiser',f'stats:{days}:{page}'),button('⬅️ Administration','admin')]]
+        self.screen(uid,'\n'.join(lines),rows)

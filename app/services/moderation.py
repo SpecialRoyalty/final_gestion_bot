@@ -41,6 +41,7 @@ class Moderation:
         if u.get('is_bot'): return
         present=member_present(q['new_chat_member']); old=member_present(q['old_chat_member'])
         if present==old: return
+        self.metric('join' if present else 'leave',uid,g['id'],key=f'member:{g["id"]}:{uid}:{q.get("date",time.time())}:{present}')
         self.user(uid)
         if present:
             self.db.run('INSERT INTO members(uid,gid,joined,media) VALUES (?,?,?,?) ON CONFLICT(uid,gid) DO UPDATE SET present=1,joined=excluded.joined,media=excluded.media,warned=0',

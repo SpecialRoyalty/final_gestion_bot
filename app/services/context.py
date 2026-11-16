@@ -10,6 +10,7 @@ class Context:
         self.db, self.api, self.owners, self.tz, self.support = db, api, set(owners), tz, support
         self.me = api.call('getMe')
         self.last_tick = 0
+        if not self.db.setting('metrics:since'): self.db.set('metrics:since',time.time())
 
     def user(self, uid):
         self.db.run('INSERT INTO users(id) VALUES (?) ON CONFLICT(id) DO NOTHING', (uid,))
@@ -67,9 +68,12 @@ class Context:
         return active_access(self.access(uid, g['id']), time.time())
 
     def grant(self, uid, g, source, expires=None):
+        previous=self.access(uid,g['id'])
         self.db.run('INSERT INTO access(uid,gid,source,expires) VALUES (?,?,?,?) '
                     'ON CONFLICT(uid,gid) DO UPDATE SET source=excluded.source,expires=excluded.expires,revoked=0',
                     (uid,g['id'],source,expires))
+        if not active_access(previous,time.time()) or previous['expires']!=expires:
+            self.metric('grant',uid,g['id'])
 
     def link(self, uid, g, purpose='access'):
         row = self.db.one('SELECT url FROM links WHERE uid=? AND gid=? AND purpose=? AND expires>?',

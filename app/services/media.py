@@ -102,6 +102,7 @@ def run_worker(url,token,stop):
     from .telegram import Telegram
     db=DB(url,lock=False,initialize=False); api=Telegram(token); engine=MediaEngine(db,api)
     while not stop.is_set():
+        db.set('media:heartbeat',time.time())
         task=db.one('SELECT t.*,g.chat,g.anti FROM media_tasks t JOIN groups g ON t.gid=g.id WHERE t.due<=? ORDER BY t.due LIMIT 1',(time.time(),))
         if not task:
             stop.wait(2); continue

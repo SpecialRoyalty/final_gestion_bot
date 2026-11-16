@@ -15,21 +15,37 @@ class Scheduler:
                          'can_add_web_page_previews':False,'can_invite_users':False,
                          'can_change_info':False,'can_pin_messages':False})
 
-    def notice(self,g,kind,text,rows,force=False):
+    def notice(self,g,kind,text,rows,force=False,photo=None):
         old=self.db.one('SELECT * FROM notices WHERE gid=? AND kind=?',(g['id'],kind))
-        body=json.dumps([text,rows],ensure_ascii=False)
-        if old and old['body']==body and not force: return
-        args=dict(chat_id=g['chat'],text=text,reply_markup=keyboard(*rows))
+        body=json.dumps([text,rows,photo],ensure_ascii=False)
+        prefix='notice:'+g['id']+':'+kind
+        verified=float(self.db.setting(prefix+':verified','0'))
+        if old and old['body']==body and not force and time.time()-verified<300: return
+        if photo and len(text.encode('utf-16-le'))//2>1024:
+            raise ValueError('Texte du portail trop long pour accompagner une image ; raccourcis-le.')
+        args=dict(chat_id=g['chat'],reply_markup=keyboard(*rows))
         if old:
+            oldbody=json.loads(old['body']); oldphoto=oldbody[2] if len(oldbody)>2 else None
             try:
-                self.api.call('editMessageText',message_id=old['mid'],**args)
-                self.db.run('UPDATE notices SET body=? WHERE gid=? AND kind=?',(body,g['id'],kind)); return
-            except APIError as e:
-                if 'message is not modified' in str(e): return
-                if 'message to edit not found' not in str(e): raise
-        sent=self.api.call('sendMessage',**args)
+                if photo and photo!=oldphoto:
+                    self.api.call('editMessageMedia',message_id=old['mid'],media={'type':'photo','media':photo,'caption':text},**args)
+                elif photo:
+                    self.api.call('editMessageCaption',message_id=old['mid'],caption=text,**args)
+                else:
+                    self.api.call('editMessageText',message_id=old['mid'],text=text,**args)
+                self.db.run('UPDATE notices SET body=? WHERE gid=? AND kind=?',(body,g['id'],kind))
+                self.db.set(prefix+':verified',time.time()); self.db.set(prefix+':changed',time.time())
+                return
+            except APIError as error:
+                if 'message is not modified' in str(error):
+                    self.db.run('UPDATE notices SET body=? WHERE gid=? AND kind=?',(body,g['id'],kind))
+                    self.db.set(prefix+':verified',time.time()); return
+                if 'message to edit not found' not in str(error): raise
+        if photo: sent=self.api.call('sendPhoto',photo=photo,caption=text,**args)
+        else: sent=self.api.call('sendMessage',text=text,**args)
         self.db.run('INSERT INTO notices(gid,kind,mid,body) VALUES (?,?,?,?) ON CONFLICT(gid,kind) DO UPDATE SET mid=excluded.mid,body=excluded.body',
                     (g['id'],kind,sent['message_id'],body))
+        self.db.set(prefix+':verified',time.time()); self.db.set(prefix+':changed',time.time())
 
     def publish_portal(self,g,force=False):
         if g['role']!='portal' or not g['enabled']: return False
@@ -39,9 +55,10 @@ class Scheduler:
         rows=[[button('👤 Découvrir les groupes',url=self.deep())]]
         if live: rows.insert(0,[button('🔥 '+live['title'],url=self.deep('g_'+live['id']))])
         try:
-            self.notice(g,'portal',text,rows,force=force)
-        except APIError as error:
-            message='Publication impossible : '+str(error)
+            self.notice(g,'portal',text,rows,force=force,photo=self.db.setting('portal_photo:'+g['id']) or None)
+        except Exception as error:
+            from app.services.monitoring import safe_error
+            message='Publication impossible : '+safe_error(error)
             self.db.set('portal_error:'+g['id'],message)
             self.alert(g['title']+' : '+message)
             return False
@@ -55,7 +72,9 @@ class Scheduler:
             self.db.run('DELETE FROM notices WHERE gid=? AND kind=?',(g['id'],kind))
 
     def jobs(self):
-        for job in self.db.all('SELECT * FROM jobs WHERE due<=? ORDER BY due LIMIT 30',(time.time(),)):
+        deadline=time.monotonic()+10
+        for job in self.db.all('SELECT * FROM jobs WHERE due<=? ORDER BY due LIMIT 5',(time.time(),)):
+            if time.monotonic()>deadline: break
             try:
                 payload=json.loads(job['payload'])
                 guard_gid=payload.pop('_unless_entitled',None)
@@ -66,14 +85,14 @@ class Scheduler:
                 if guard_unban: skip=bool(self.user(payload['user_id'])['banned'])
                 if not skip: self.api.call(job['method'],**payload)
                 self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],))
-            except APIError as e:
+            except Exception as e:
                 # A missing message is already deleted. Other failures remain visible/retriable.
                 if job['method']=='deleteMessage' and 'message to delete not found' in str(e):
                     self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],)); continue
                 attempts=job['attempts']+1
-                delay=max(e.retry,min(3600,2**min(attempts,12)))
+                delay=max(getattr(e,'retry',0),min(3600,2**min(attempts,12)))
                 self.db.run('UPDATE jobs SET attempts=?,due=? WHERE id=?',(attempts,time.time()+delay,job['id']))
-                if attempts==3 and job['method']!='sendMessage': self.alert('Opération à vérifier : '+job['method']+' — '+str(e))
+                if attempts==3 and job['method']!='sendMessage': self.record_failure('job:'+job['method'],e)
 
     def close(self,g):
         # Lock first, enqueue all cleanup transactionally, then record closure.
@@ -115,30 +134,39 @@ class Scheduler:
                         if b>now: windows.setdefault(g['id'],[]).append((a,b))
         return windows
 
-    def tick(self):
-        now=time.time()
-        self.jobs()
-        if now-self.last_tick<20: return
-        self.last_tick=now
-        warning=self.db.setting('media_warning')
-        if warning:
-            self.alert(warning); self.db.set('media_warning','')
+    def task_referrals(self,now):
         # Confirm current membership instead of relying solely on possibly missed leave updates.
         portal=self.db.one("SELECT * FROM groups WHERE role='portal' AND enabled=1")
+        errors=[]
         if portal:
-            for r in self.db.all('SELECT * FROM referrals WHERE valid=0 AND present=1 AND joined<=? LIMIT 100',(now-300,)):
-                member=self.api.call('getChatMember',chat_id=portal['chat'],user_id=r['invitee'])
-                if not member_present(member):
-                    self.db.run('UPDATE referrals SET present=0 WHERE invitee=?',(r['invitee'],)); continue
-                if self.db.setting('referral_rule','simple')=='cascade':
-                    # Child must have stayed 5 min, not be recursively validated (avoids deadlock).
-                    children=self.db.all('SELECT * FROM referrals WHERE inviter=? AND present=1 AND joined<=?',(r['invitee'],now-300))
-                    qualifies=False
-                    for child in children:
-                        if member_present(self.api.call('getChatMember',chat_id=portal['chat'],user_id=child['invitee'])):
-                            qualifies=True; break
-                    if not qualifies: continue
-                self.db.run('UPDATE referrals SET valid=1 WHERE invitee=?',(r['invitee'],))
+            cursor=int(self.db.setting('referrals:cursor','0'))
+            rows=self.db.all('SELECT * FROM referrals WHERE valid=0 AND present=1 AND joined<=? AND invitee>? ORDER BY invitee LIMIT 10',(now-300,cursor))
+            if not rows:
+                rows=self.db.all('SELECT * FROM referrals WHERE valid=0 AND present=1 AND joined<=? ORDER BY invitee LIMIT 10',(now-300,))
+            deadline=time.monotonic()+15
+            for r in rows:
+                if time.monotonic()>deadline: break
+                self.db.set('referrals:cursor',r['invitee'])
+                try:
+                    member=self.api.call('getChatMember',chat_id=portal['chat'],user_id=r['invitee'])
+                    if not member_present(member):
+                        self.db.run('UPDATE referrals SET present=0 WHERE invitee=?',(r['invitee'],)); continue
+                    if self.db.setting('referral_rule','simple')=='cascade':
+                        # Child must have stayed 5 min, not be recursively validated (avoids deadlock).
+                        children=self.db.all('SELECT * FROM referrals WHERE inviter=? AND present=1 AND joined<=?',(r['invitee'],now-300))
+                        qualifies=False
+                        for child in children:
+                            if member_present(self.api.call('getChatMember',chat_id=portal['chat'],user_id=child['invitee'])):
+                                qualifies=True; break
+                        if not qualifies: continue
+                    with self.db.transaction():
+                        self.db.run('UPDATE referrals SET valid=1 WHERE invitee=?',(r['invitee'],))
+                        self.metric('referral_valid',r['inviter'],portal['id'],key='valid:'+str(r['invitee']))
+                except Exception as error:
+                    errors.append(type(error).__name__)
+        if errors: raise RuntimeError(f'{len(errors)} invitations non vérifiées : '+', '.join(sorted(set(errors))))
+
+    def task_expiry(self,now):
         for a in self.db.all('SELECT * FROM access WHERE revoked=0 AND expires IS NOT NULL AND expires<=?',(now,)):
             g=self.group(a['gid'])
             if g:
@@ -146,17 +174,26 @@ class Scheduler:
                     self.enqueue('banChatMember',dict(chat_id=g['chat'],user_id=a['uid'],_unless_entitled=g['id']))
                     self.db.run('UPDATE access SET revoked=1 WHERE uid=? AND gid=?',(a['uid'],a['gid']))
         self.db.run("UPDATE orders SET status='expired' WHERE (status='pending' AND created<?) OR (status='checkout' AND created<?)",(now-3600,now-900))
+
+    def task_schedule(self,now):
         groups=self.db.all('SELECT * FROM groups WHERE enabled=1')
         windows=self.scheduled(groups,now)
         # Close all outdated sessions BEFORE opening another, even across midnight.
+        failed_closures=set()
         for g in groups:
             spans=windows.get(g['id'],[])
             should_open=g['role'] in ('always','vip','proof') or any(a<=now<b for a,b in spans)
             if g['role']=='portal': continue
             if g['opened'] and not should_open:
-                self.close(g); g['opened']=0
+                try:
+                    self.close(g); g['opened']=0
+                except Exception as error:
+                    failed_closures.add(g['id'])
+                    self.record_failure('group:'+g['id'],error)
         for g in groups:
+            if g['id'] in failed_closures: continue
             try:
+                self.db.set('group:'+g['id']+':attempt',now)
                 spans=windows.get(g['id'],[])
                 active=next(((a,b) for a,b in spans if a<=now<b),None)
                 should_open=g['role'] in ('always','vip','proof') or bool(active)
@@ -166,6 +203,9 @@ class Scheduler:
                     count=max(0,self.api.call('getChatMemberCount',chat_id=g['chat'])-1)
                     should_open=count>=g['threshold']
                 if g['role']!='portal':
+                    if should_open and not g['opened'] and g['role']=='chat':
+                        other=self.db.one("SELECT id FROM groups WHERE role='chat' AND opened=1 AND id!=?",(g['id'],))
+                        if other: raise ValueError('Ouverture bloquée : la fermeture du groupe précédent doit être confirmée.')
                     if should_open and not g['opened']:
                         # Admin permissions are unaffected by setChatPermissions.
                         self.permissions(g,True)
@@ -180,10 +220,12 @@ class Scheduler:
                         remaining=active[1]-now
                         message='🟢 Groupe ouvert, vous pouvez envoyer textes, photos et vidéos.'
                         if remaining<=1800: message+='\nFermeture dans '+countdown(remaining)+'.'
+                        message+='\nHeure de fermeture : '+datetime.fromtimestamp(active[1],ZoneInfo(self.tz)).strftime('%H:%M')+' ('+self.tz+').'
                         self.notice(g,'status',message,[invite])
                     elif not g['opened']:
                         future=[a for a,b in spans if a>now]
                         message='🔴 Groupe fermé.'+(' Ouverture dans '+countdown(min(future)-now)+'.' if future else ' Prochaine ouverture annoncée ici.')
+                        if future: message+='\nPrévue le '+datetime.fromtimestamp(min(future),ZoneInfo(self.tz)).strftime('%d/%m à %H:%M')+' ('+self.tz+').'
                         self.notice(g,'status',message,[invite])
                     if g['opened'] and g['rules']:
                         bucket=str(int(now//1800))
@@ -194,18 +236,28 @@ class Scheduler:
                 if now-float(self.db.setting('health:'+g['id'],'0'))>=7200:
                     self.check_rights(g)
                     self.db.set('health:'+g['id'],now)
-            except (APIError,ValueError) as e:
-                self.alert(g['title']+' : '+str(e))
+                self.db.set('group:'+g['id']+':ok',time.time())
+                self.db.set('group:'+g['id']+':error','')
+            except Exception as error:
+                self.record_failure('group:'+g['id'],error)
+
+    def task_announcements(self,now):
+        groups=self.db.all('SELECT * FROM groups WHERE enabled=1')
         # Public portal & temporary cross-promotion, maintained in one message per group.
         live=self.db.one("SELECT * FROM groups WHERE enabled=1 AND role='chat' AND opened=1")
         for g in groups:
-            if g['role']=='portal':
-                self.publish_portal(g)
-            elif g['role'] in ('chat','always','free'):
-                if live and g['id']!=live['id']:
-                    self.notice(g,'live','🔥 '+live['title']+' est ouvert !',
-                        [[button('👀 Découvrir',url=self.deep('g_'+live['id']))],[button('🔗 J’invite',url=self.deep('invite'))]])
-                else: self.remove_notice(g,'live')
+            try:
+                if g['role']=='portal':
+                    self.publish_portal(g)
+                elif g['role'] in ('chat','always','free'):
+                    if live and g['id']!=live['id']:
+                        self.notice(g,'live','🔥 '+live['title']+' est ouvert !',
+                            [[button('👀 Découvrir',url=self.deep('g_'+live['id']))],[button('🔗 J’invite',url=self.deep('invite'))]])
+                    else: self.remove_notice(g,'live')
+            except Exception as error:
+                self.record_failure('announce:'+g['id'],error)
+
+    def task_activity(self,now):
         for m in self.db.all("SELECT m.* FROM members m JOIN groups g ON m.gid=g.id WHERE m.present=1 AND g.enabled=1 AND g.role IN ('chat','always') AND m.media<=?",(now-3*86400,)):
             g=self.group(m['gid'])
             if self.admin(m['uid'],g): continue
@@ -217,6 +269,8 @@ class Scheduler:
             elif not m['warned']:
                 self.enqueue('sendMessage',dict(chat_id=m['uid'],text='⚠️ Partage un média dans '+g['title']+' avant demain pour conserver ton accès.'))
                 self.db.run('UPDATE members SET warned=1 WHERE uid=? AND gid=?',(m['uid'],g['id']))
+
+    def task_ads(self,now):
         advertised=set()
         for ad in self.db.all('SELECT a.* FROM ads a JOIN groups g ON a.gid=g.id WHERE a.enabled=1 AND g.enabled=1 AND g.opened=1 AND a.next_at<=? ORDER BY a.next_at,a.id',(now,)):
             if ad['gid'] in advertised: continue
@@ -229,5 +283,30 @@ class Scheduler:
             # Rotate campaigns within the group, one visible ad at a time.
             self.db.run('UPDATE ads SET next_at=? WHERE gid=?',(now+ad['interval_hours']*3600,g['id']))
             self.db.run('UPDATE ads SET next_at=? WHERE id=?',(now+(ad['interval_hours']*3600)+1,ad['id']))
-        self.jobs()
 
+    def tick(self):
+        now=time.time()
+        if now-self.last_tick<20: return
+        self.last_tick=now
+        self.db.set('scheduler:attempt',now)
+        warning=self.db.setting('media_warning')
+        if warning:
+            self.alert(warning); self.db.set('media_warning','')
+        failed=[]
+        # Opening/countdowns do not depend on successful referral checks or queue delivery.
+        for name in ('expiry','schedule','announcements','referrals','activity','ads','diagnostics'):
+            self.db.set('task:'+name+':attempt',time.time())
+            try:
+                getattr(self,'task_'+name)(now)
+                self.db.set('task:'+name+':ok',time.time())
+                self.db.set('task:'+name+':error','')
+            except Exception as error:
+                failed.append(name)
+                self.record_failure('task:'+name,error)
+        try:
+            self.jobs()
+        except Exception as error:
+            failed.append('jobs')
+            self.record_failure('task:jobs',error)
+        self.db.set('scheduler:completed',time.time())
+        self.db.set('scheduler:failed',','.join(failed))
