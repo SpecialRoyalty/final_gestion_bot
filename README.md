@@ -156,7 +156,7 @@ Documentation de référence consultée :
 ## Configuration des paiements manuels (version 2)
 
 1. Administration → Moyens de paiement : saisir le destinataire PayPal, les coordonnées Revolut
-   et l’adresse USDT TRC20. Un tiret désactive un moyen pour les nouveaux achats.
+   et l’adresse USDT TRC20. Le bouton Désactiver ce moyen le retire des nouveaux achats.
 2. Administration → Groupe → Tarifs : saisir séparément les bases PayPal et Revolut en EUR,
    puis le tarif USDT en USDT. Exemple : base 10 EUR → total 11,50 EUR avec supplément.
    Les prix acceptent deux décimales et sont stockés en centimes, sans calcul flottant.
@@ -371,13 +371,7 @@ les seules captures ne prouvent pas si le service était arrêté, bloqué ou ma
 
 ### Règle des liens et objectifs, conservée
 
-Un membre utilise un seul lien de parrainage actif vers le portail. Les invitations validées
-progressent **en parallèle** pour les groupes classiques et 24 h/24 ; elles ne sont pas consommées.
-Chaque groupe possède son propre seuil. Exemple : 24 h/24 à 3, chat A à 5, chat B à 10 → les accès
-se débloquent respectivement à 3, 5 puis 10 invitations validées. Il n’existe aucun ordre imposé.
-Chaque accès débloqué fournit ensuite son propre lien d’entrée avec contrôle d’identité.
-Les VIP restent payants. Après exclusion pour inactivité, la remise à zéro ne concerne que le groupe
-concerné : sa base de calcul repart du compteur courant, sans retirer les autres accès.
+Depuis la version 10, chaque membre choisit son objectif et reçoit un lien personnel par groupe classique ou 24 h/24. Tous ces liens conduisent au portail. Chaque invité ne compte que pour le premier objectif auquel son invitation a été attribuée ; aucun double crédit après départ et retour. Le bouton Régénérer mon lien révoque l’ancien lien du même objectif sans toucher aux crédits acquis.
 
 ### Migration et validation
 
@@ -498,9 +492,42 @@ Cette section remplace les indications antérieures sur le décompte précis en 
 - Les annonces de statut des groupes sont supprimées puis republiées au changement de palier, jamais éditées. Une annonce identique reste en place, y compris après redémarrage. Si la suppression échoue, aucune nouvelle annonce n’est envoyée. Si l’envoi échoue après suppression, le cycle suivant réessaie.
 - Ouverture : heures, puis 30, 10, 5, 4, 3, 2 et 1 minute. Fermeture : 30, 15, 5, 4, 3, 2 et 1 minute. Gratuit hebdomadaire : jours, heures, puis 30, 15, 10, 5, 4, 3, 2 et 1 minute. Les heures lointaines sont approximatives ; la date et l’heure prévues restent affichées. Le cycle vérifie les paliers toutes les 20 secondes environ, selon la réponse Telegram ; aucun rattrapage des annonces passées n’est publié.
 - `/start` publie un panneau récent et retire le précédent. Les boutons actualisent le panneau courant ; le passage image/texte recrée le panneau et retire l’ancien. Une suppression privée impossible désactive les boutons de l’ancien panneau et apparaît dans les diagnostics.
-- Administration → **Accueil et traductions** : texte d’accueil par langue (500 caractères UTF-16), image commune facultative, description de chaque groupe par langue et texte coupe-file commun par langue. Envoyer un tiret à la place du texte rétablit le contenu par défaut. **Retirer l’image** rétablit l’accueil texte.
+- Administration → **Accueil et traductions** : texte d’accueil par langue (500 caractères UTF-16), image commune facultative, description de chaque groupe par langue et texte coupe-file commun par langue. Le bouton Texte par défaut rétablit le contenu par défaut. **Retirer l’image** rétablit l’accueil texte.
 - **Langue** : Français, English, Italiano, Español. Le choix individuel est conservé en base, y compris après redémarrage. Les écrans membres, invitations, étapes de paiement, erreurs de preuve et notifications de paiement utilisent cette langue. Les titres et descriptions personnalisés ne sont pas traduits automatiquement ; une description sans version locale reprend celle du groupe. L’accueil et le coupe-file utilisent leur texte traduit par défaut si aucun texte local n’a été saisi. L’administration et les annonces publiques restent en français. Les pages externes suivent leurs propres réglages linguistiques.
 - Les droits d’accès et liens restent identiques quand la langue change. Aucune nouvelle migration de schéma : les réglages sont stockés dans la table existante `settings`.
 - Aucun bannissement fondé sur l’alphabet du nom ou du pseudonyme n’est ajouté.
 
 Tests : paliers et absence de répétition, ordre suppression/envoi, reprise après échec, autorisation des réglages, accueil illustré et transitions texte/photo, persistance des langues, navigation et paiements dans chaque langue. Les tests Telegram utilisent un simulateur ; ils ne certifient pas un déploiement réel.
+
+
+## Version 10 — objectifs distincts, signalements et annonces obligatoires
+
+### Mise à jour et conservation des accès
+
+Remplacer les fichiers de l’application puis redéployer avec la même `DATABASE_URL`.
+La migration embarquée `004_member_workflows.sql` ajoute cinq tables et des index ; elle ne supprime aucune table existante et les migrations précédentes restent inchangées.
+Au premier démarrage, les accès existants restent conservés. Les objectifs déjà atteints sous l’ancien compteur commun, sans accès encore enregistré, deviennent des accès acquis. Les anciens compteurs partiels et invitations sans cible ne sont pas attribués arbitrairement à un groupe. Les compteurs des nouveaux objectifs démarrent à zéro. Les anciens liens de parrainage sans cible sont désactivés et leur révocation Telegram est mise en file ; les membres prennent leurs nouveaux liens depuis **Inviter mes amis**. Cette transition est enregistrée une seule fois.
+
+### Invitations par objectif
+
+**Inviter mes amis → choisir un groupe** affiche son lien personnel, le bouton de partage et **Régénérer mon lien** avec confirmation. Depuis une fiche de groupe, le bouton mène directement à cet objectif. Chaque lien mène au même portail ; une table conserve le groupe cible. Le premier rattachement d’un invité est conservé et empêche les doubles crédits après un départ/retour ou un changement de lien. Les règles internes simple/cascade restent identiques, sans être exposées aux membres. Les droits d’accès restent associés à l’identifiant logique du groupe lors d’un remplacement Telegram.
+
+### Signalements et +5 crédits
+
+**Signaler un bug · +5 → objectif → description**. L’admin reçoit une notification et retrouve les dossiers dans **Administration → Signalements**. Il choisit **Bug réel · attribuer +5** ou **Refuser**. Une décision est définitive pour ce dossier et transactionnelle : double clic ou nouvelle tentative ne donne pas une deuxième récompense. Un bug validé rapporte cinq crédits au seul objectif choisi. Les crédits de bugs sont séparés des statistiques d’invitations réelles ; ils sont inclus dans le compteur de débannissement. Le membre consulte ses vingt derniers dossiers dans **Mes signalements**. Les descriptions identiques du même membre sont refusées ; plafond de trois signalements sur 24 heures et texte de 20 à 2000 caractères. Les doublons signalés par différentes personnes restent à apprécier par l’admin. La sélection de récompense concerne les groupes classiques et 24 h/24 disposant d’un objectif d’invitations.
+
+### Annonce obligatoire lors d’une activation
+
+La première activation d’un nouveau groupe non-portail enregistre une annonce. À la prochaine interaction, le membre voit son nom, sa description et ses conditions d’accès, avec les moyens de paiement configurés et leurs montants majorés si applicables. Il doit cliquer **J’ai compris** avant de naviguer ou payer. Plusieurs annonces sont présentées successivement ; les confirmations sont persistantes et personnelles. Les groupes désactivés sont ignorés. Les groupes déjà actifs lors de la migration ne sont pas annoncés comme nouveaux. Une désactivation/réactivation du même groupe ne recommence pas la campagne. Le propriétaire conserve son accès à l’administration.
+
+### Réglages par boutons
+
+**Mots interdits** montre une liste paginée avec **Ajouter**, puis sélection et confirmation pour **Supprimer**. Les termes non sélectionnés sont conservés. Les paiements offrent **Désactiver ce moyen** et **Retirer ce tarif** ; les textes localisés offrent **Texte par défaut**. Le tiret n’est plus une commande de suppression. L’accueil, les annonces, les invitations et les signalements des membres disposent des traductions françaises, anglaises, italiennes et espagnoles. Les textes personnalisés restent configurables par langue.
+
+### Coupures Telegram
+
+Les erreurs réseau sont présentées comme des connexions interrompues, jamais comme une preuve de disparition du groupe. Les opérations idempotentes (lecture, édition, permissions, suppression, révocation) disposent de trois tentatives avec attente progressive. Les envois et créations de liens ne sont pas répétés aveuglément dans la couche réseau : Telegram peut avoir accepté la requête avant la perte de sa réponse. Les tâches planifiées et leur file conservent leur reprise habituelle. Une réponse perdue après un envoi reste un résultat ambigu ; l’API Telegram ne fournit pas de clé permettant de garantir un envoi exactement une fois.
+
+### Validation
+
+Les tests couvrent l’attribution par groupe, la validation cascade, les retours sans double crédit, la régénération et son échec, les décisions de bugs idempotentes, les autorisations, les annonces bloquantes, leur persistance, les suppressions ciblées et les coupures réseau. Les requêtes de schéma et de transition sont aussi vérifiées sur PostgreSQL 16.2 en mode local sans serveur réseau. Le bot Telegram en production n’est pas accessible dans cet environnement ; les appels Telegram des tests sont simulés.
