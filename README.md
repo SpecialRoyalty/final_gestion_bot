@@ -388,3 +388,47 @@ Aucune remise à zéro des utilisateurs, invitations, droits ou paiements.
 Résultats : **90 tests locaux réussis**, 6 tests réseau PostgreSQL non exécutés dans cet environnement.
 Les trois scénarios SQL PostgreSQL 16.2 ont été rejoués avec la nouvelle table statistique.
 Aucun accès à la base Railway ni test réel Telegram réalisé ici ; vérifier le panneau après déploiement.
+
+## Version 7 — configuration complète et accès répété à l’accueil
+
+### Pourquoi le coupe-file peut être absent
+
+Un moyen de paiement est proposé uniquement si ses **coordonnées globales** et son **tarif dans
+le groupe concerné** sont renseignés. Les coordonnées seules ou le tarif seul ne suffisent pas.
+Le membre ne voit pas d’achat si son accès est déjà acquis ou si le groupe n’est pas payant.
+
+- Administration → Moyens de paiement : enregistrer le destinataire/adresse.
+- Administration → Groupe → Tarifs : enregistrer le prix de base pour le même moyen.
+
+### Pourcentage de configuration
+
+Administration → **Configuration**, également accessible depuis État du réseau, affiche le nombre
+exact de critères remplis et leur pourcentage. Le calcul inclut les groupes enregistrés (y compris
+ceux désactivés), le portail actif et au moins un groupe actif à rejoindre. Les contrôles sont adaptés
+au rôle : description, image de portail, objectif, horaires, jour, seuil si locker activé, puis coordonnées
+et tarifs de chacun des trois moyens de paiement demandés pour les groupes payants.
+Une configuration partielle des moyens de paiement peut donc donner un score inférieur à 100 %
+alors que le moyen entièrement configuré fonctionne. Le panneau l’explique et affiche les moyens
+actuellement utilisables. Les boutons « compléter » ouvrent les réglages manquants.
+
+**Ce pourcentage mesure la configuration, pas la disponibilité ni l’absence de bugs.**
+Les vérifications techniques conservent leurs états et leurs dates séparément.
+Les éléments manquants apparaissent immédiatement à l’ouverture du panneau, sans attendre
+un contrôle Telegram. Les coordonnées et montants eux-mêmes ne sont pas exposés dans le bilan.
+
+### /start utilisable plusieurs fois
+
+Le menu natif Telegram propose « Ouvrir ou retrouver mon espace » (/start) dans les conversations
+privées. `/start` et `/start@nom_du_bot` reviennent à l’accueil et annulent une saisie en attente.
+La navigation conserve le même message du bot : il n’y a pas une nouvelle bulle à chaque appel,
+et l’heure de création Telegram de l’ancien message peut rester visible.
+L’accueil affiche désormais son heure d’actualisation dans son texte.
+
+Le panneau technique distingue le dernier /start reçu, le dernier /start affiché et une éventuelle
+erreur d’affichage. Une erreur Telegram pendant la recherche des droits admin d’un autre groupe
+ne bloque plus l’accueil utilisateur. Les mises à jour reçues sont traitées avant la maintenance
+planifiée de chaque cycle. Les durées réseau restent variables : cela n’est pas une garantie de
+réponse instantanée ni la confirmation de la cause exacte d’un incident non observé sur Railway.
+
+Validation : **102 tests locaux réussis**, 6 tests réseau non exécutés ici, contrôle de l’archive
+et initialisation embarquée réussis. Pas de nouvelle migration SQL pour cette version.
