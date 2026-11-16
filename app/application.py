@@ -11,6 +11,8 @@ from app.services.scheduler import Scheduler
 from app.services.payments import ManualPayments
 
 
-class App(Readiness, Monitoring, Context, Screens, Callbacks, LegacyPayments, Router,
+from app.handlers.welcome import Welcome
+
+class App(Welcome, Readiness, Monitoring, Context, Screens, Callbacks, LegacyPayments, Router,
           Moderation, Scheduler, ManualPayments, PaymentScreens):
     """Composition root: handlers, services and adapters share one application context."""

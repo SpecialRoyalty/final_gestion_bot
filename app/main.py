@@ -38,7 +38,7 @@ def main():
                 except ValueError as e:
                     msg=update.get('message',{})
                     if msg.get('chat',{}).get('type')=='private':
-                        app.screen(msg['from']['id'],str(e),[[{'text':'⬅️ Accueil','callback_data':'home'}]])
+                        app.screen(msg['from']['id'],str(e),[[{'text':app.tr(msg['from']['id'],'⬅️ Accueil'),'callback_data':'home'}]])
                     else: app.alert(str(e))
                 except APIError as e:
                     # Keep update for retry on temporary Telegram errors.
