@@ -9,9 +9,17 @@ class Welcome:
         if action=='language' and len(parts)==2:
             if parts[1] in LANGUAGES: self.db.set('language:'+str(uid),parts[1])
             self.show(uid,'member'); return True
-        if action not in ('welcomeconfig','welcomelang','welcometext','welcomephoto','welcomeclear','localdesc','localfastpass'): return False
+        if action not in ('welcomeconfig','welcomelang','welcometext','welcomephoto','welcomeclear','localdesc','localfastpass','welcomereset'): return False
         if uid not in self.owners: return True
-        if action=='welcomeconfig':
+        if action=='welcomereset' and len(parts)>=3 and parts[1] in LANGUAGES:
+            lang,kind=parts[1:3]
+            if kind=='welcometext': key='welcome_text:'+lang
+            elif kind=='localfastpass': key='fastpass_description:'+lang
+            elif kind=='localdesc' and len(parts)==4 and self.group(parts[3]): key='description:'+parts[3]+':'+lang
+            else: return True
+            self.db.run('DELETE FROM settings WHERE key=?',(key,))
+            self.welcome_callback(uid,'welcomelang:'+lang)
+        elif action=='welcomeconfig':
             self.screen(uid,'<b>🖼 Accueil et traductions</b>\nLe texte et les descriptions sont configurables par langue. Les traductions du bot sont intégrées. Les textes personnalisés ne sont pas traduits automatiquement.\n\nImage commune : '+('configurée' if self.db.setting('welcome_photo') else 'aucune'),
                 [[button(name,'welcomelang:'+code)] for code,name in LANGUAGES.items()]+
                 [[button('🖼 Modifier l’image','welcomephoto'),button('🗑 Retirer l’image','welcomeclear')],
@@ -31,7 +39,7 @@ class Welcome:
             if action=='localdesc' and (len(parts)!=3 or not self.group(parts[2])): return True
             self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
             limit=500 if action=='welcometext' else (1800 if action=='localfastpass' else 2500)
-            self.screen(uid,f'Envoie le texte en {LANGUAGES[parts[1]]} (maximum {limit} caractères). Un tiret rétablit le texte par défaut.',[[button('⬅️ Annuler','welcomelang:'+parts[1])]])
+            self.screen(uid,f'Envoie le texte en {LANGUAGES[parts[1]]} (maximum {limit} caractères). Utilise le bouton ci-dessous pour rétablir le texte par défaut.',[[button('↩️ Texte par défaut','welcomereset:'+parts[1]+':'+action+(':'+parts[2] if action=='localdesc' else ''))],[button('⬅️ Annuler','welcomelang:'+parts[1])]])
         return True
 
     def welcome_input(self,uid,m,pending):
@@ -48,8 +56,7 @@ class Welcome:
             limit=500 if action=='welcometext' else (1800 if action=='localfastpass' else 2500)
             if not value or len(value.encode('utf-16-le'))//2>limit: raise ValueError(f'Texte requis, maximum {limit} caractères.')
             key=('welcome_text:'+parts[1] if action=='welcometext' else 'fastpass_description:'+parts[1] if action=='localfastpass' else 'description:'+parts[2]+':'+parts[1])
-            if value=='-': self.db.run('DELETE FROM settings WHERE key=?',(key,))
-            else: self.db.set(key,value)
+            self.db.set(key,value)
             target='welcomelang:'+parts[1]
         self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
         self.welcome_callback(uid,target)

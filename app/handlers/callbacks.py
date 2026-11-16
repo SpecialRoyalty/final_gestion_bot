@@ -24,7 +24,10 @@ class Callbacks:
         self.api.call('answerCallbackQuery',callback_query_id=q['id'])
         if q.get('message',{}).get('chat',{}).get('id')!=uid: return
         if self.user(uid)['permanent']: return self.show(uid)
+        if data.startswith('launchack:'): return self.acknowledge_launch(uid,data.split(':',1)[1])
+        if self.launch_gate(uid): return
         self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
+        if self.workflow_callback(uid,data): return
         if self.welcome_callback(uid,data): return
         if self.readiness_callback(uid,data): return
         if self.monitoring_callback(uid,data): return
@@ -46,13 +49,15 @@ class Callbacks:
             return self.show(uid,'g:'+g['id'])
         if action=='setting' and uid in self.owners:
             key=parts[1]
+            if key=='words': return self.words_screen(uid)
             if key=='referral_rule': return self.show_referral_settings(uid)
             if key not in ('unban_goal','words','fastpass_description'): return
             self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
             prompt={'referral_rule':'Écris simple ou cascade.','unban_goal':'Envoie le nombre requis (1 à 10000).',
-                    'words':'Envoie les termes interdits, un par ligne. Un tiret pour vider.',
+                    'words':'Ajoute un terme interdit.',
                     'fastpass_description':'Envoie le texte commun à tous les accès coupe-file (maximum 1800 caractères).'}[key]
-            return self.screen(uid,prompt,[[button('⬅️ Annuler','admin')]])
+            rows=[[button('↩️ Texte par défaut','resetfastpass')]] if key=='fastpass_description' else []
+            return self.screen(uid,prompt,rows+[[button('⬅️ Annuler','admin')]])
         if action in ('roles','role','slots','slot','toggle','edit','ads','adnew','adoff','publish','portalphoto'):
             g=self.group(parts[1])
             if not g or not self.admin(uid,g): return
@@ -104,6 +109,8 @@ class Callbacks:
                         self.db.run('UPDATE groups SET opened=0 WHERE id=?',(g['id'],))
                         self.db.set('locked:'+g['id'],'')
                 self.db.run(f'UPDATE groups SET {field}=? WHERE id=?',(1-g[field],g['id']))
+                if field=='enabled' and not g['enabled'] and g['role']!='portal':
+                    self.db.run('INSERT INTO group_launches(gid,created) VALUES (?,?) ON CONFLICT DO NOTHING',(g['id'],time.time()))
                 if field=='enabled' and not g['enabled'] and g['role']=='portal':
                     self.publish_portal(self.group(g['id']),force=True)
             if action=='edit':
@@ -127,6 +134,8 @@ class Callbacks:
         return self.show(uid,data)
 
     def input(self,uid,m,pending):
+        if self.launch_gate(uid): return
+        if self.workflow_input(uid,m,pending): return
         if self.welcome_input(uid,m,pending): return
         if self.payment_input(uid,m,pending): return
         parts=pending.split(':'); action=parts[0]
@@ -137,7 +146,8 @@ class Callbacks:
             if key=='referral_rule' and value not in ('simple','cascade'): raise ValueError('Valeur : simple ou cascade.')
             if key=='fastpass_description' and (not value or len(value)>1800): raise ValueError('Texte requis, maximum 1800 caractères.')
             if key=='unban_goal' and not (value.isdigit() and 1<=int(value)<=10000): raise ValueError('Nombre entre 1 et 10000.')
-            self.db.set(key,'' if value=='-' else value)
+            if key=='words': return self.words_screen(uid)
+            self.db.set(key,value)
             page='admin'
         else:
             g=self.group(parts[1])

@@ -34,7 +34,14 @@ class PaymentScreens:
 
     def payment_callback(self,uid,data):
         parts=data.split(':'); action=parts[0]
-        if action=='method': self.payment_choose(uid,parts[1],parts[2])
+        if action=='paydisable' and uid in self.owners and len(parts)==2 and parts[1] in METHODS:
+            self.db.set('pay:'+parts[1],''); self.payment_callback(uid,'payconfig')
+        elif action=='pricedisable' and len(parts)==3:
+            g=self.group(parts[1])
+            if g and self.admin(uid,g) and allows(g['role'],'prices') and parts[2] in METHODS:
+                self.db.run('DELETE FROM payment_prices WHERE gid=? AND method=?',(g['id'],parts[2]))
+                self.payment_callback(uid,'prices:'+g['id'])
+        elif action=='method': self.payment_choose(uid,parts[1],parts[2])
         elif action=='paystatus': self.payment_page(uid,parts[1])
         elif action=='proofpay':
             o=self.db.one("SELECT id FROM manual_orders WHERE id=? AND uid=? AND status='awaiting_proof'",(parts[1],uid))
@@ -53,7 +60,7 @@ class PaymentScreens:
             self.screen(uid,'<b>Coordonnées de paiement</b>\nConfigure les comptes et l’adresse USDT.',[[btn(name,'paydest:'+method)] for method,(name,_,_) in METHODS.items()]+[[btn('⬅️ Administration','admin')]])
         elif action=='paydest' and uid in self.owners and parts[1] in METHODS:
             self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
-            self.screen(uid,'Envoie les coordonnées de réception. Un tiret désactive ce moyen.',[[btn('⬅️ Annuler','payconfig')]])
+            self.screen(uid,'Envoie les coordonnées de réception, ou désactive ce moyen avec le bouton ci-dessous.',[[btn('⏸ Désactiver ce moyen','paydisable:'+parts[1])],[btn('⬅️ Annuler','payconfig')]])
         elif action=='prices':
             g=self.group(parts[1])
             if not g or not self.admin(uid,g) or not allows(g['role'],'prices'): return True
@@ -66,7 +73,7 @@ class PaymentScreens:
             g=self.group(parts[1])
             if not g or not self.admin(uid,g) or not allows(g['role'],'prices') or parts[2] not in METHODS: return True
             self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
-            self.screen(uid,'Envoie le prix de base, par exemple 10,50. Un tiret désactive ce tarif.',[[btn('⬅️ Annuler','prices:'+g['id'])]])
+            self.screen(uid,'Envoie le prix de base, par exemple 10,50, ou retire ce tarif avec le bouton ci-dessous.',[[btn('🗑 Retirer ce tarif','pricedisable:'+g['id']+':'+parts[2])],[btn('⬅️ Annuler','prices:'+g['id'])]])
         else: return False
         return True
 
@@ -74,18 +81,17 @@ class PaymentScreens:
         parts=pending.split(':'); action=parts[0]; text=m.get('text','').strip()
         if action=='paymentproof': self.payment_proof(uid,m,parts[1]); return True
         if action=='paydest' and uid in self.owners:
+            if text=='-': raise ValueError('Utilise le bouton Désactiver ce moyen pour le retirer.')
             if len(text)>1000 or not text: raise ValueError('Coordonnées requises, maximum 1000 caractères.')
-            self.db.set('pay:'+parts[1],'' if text=='-' else text)
+            self.db.set('pay:'+parts[1],text)
             self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
             self.payment_callback(uid,'payconfig'); return True
         if action=='price':
             g=self.group(parts[1])
             if not g or not self.admin(uid,g) or not allows(g['role'],'prices'): return True
             method=parts[2]
-            if text=='-': self.db.run('DELETE FROM payment_prices WHERE gid=? AND method=?',(g['id'],method))
-            else:
-                amount=cents(text)
-                self.db.run('INSERT INTO payment_prices(gid,method,cents) VALUES (?,?,?) ON CONFLICT(gid,method) DO UPDATE SET cents=excluded.cents',(g['id'],method,amount))
+            amount=cents(text)
+            self.db.run('INSERT INTO payment_prices(gid,method,cents) VALUES (?,?,?) ON CONFLICT(gid,method) DO UPDATE SET cents=excluded.cents',(g['id'],method,amount))
             self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
             self.payment_callback(uid,'prices:'+g['id']); return True
         return False

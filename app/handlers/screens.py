@@ -9,6 +9,7 @@ from app.utils.group_roles import ROLE_LABELS
 class Screens:
     def show(self, uid, page='home'):
         user = self.user(uid)
+        if not user['permanent'] and self.launch_gate(uid): return
         if page=='language':
             from app.utils.i18n import LANGUAGES
             return self.screen(uid,self.tr(uid,'Choisis ta langue.'),
@@ -29,13 +30,7 @@ class Screens:
                     rows=[[button('⚙️ '+g['title'],'a:'+g['id'])] for g in managed]
                     rows += [[button(self.tr(uid,'🔗 Inviter mes amis'),'invite'),button('👤 Vue membre','member')],[button(self.tr(uid,'🔄 Actualiser'),'home')]]
                     return self.screen(uid,'<b>🛠 Administration de tes groupes</b>',rows)
-        if page == 'invite':
-            portal = self.db.one("SELECT * FROM groups WHERE role='portal' AND enabled=1")
-            if not portal: return self.screen(uid, self.tr(uid,'Le portail sera bientôt disponible.'), [[button(self.tr(uid,'⬅️ Accueil'),'home')]])
-            url = self.link(uid, portal, 'referral')
-            share = 'https://t.me/share/url?' + urlencode({'url':url,'text':self.tr(uid,'Rejoins notre portail !')})
-            return self.screen(uid, self.tr(uid,'<b>🔗 Invite tes amis</b>\n\nTon lien personnel mène au portail. Tes invitations font progresser les groupes classiques et 24 h/24 en parallèle, chacun avec son objectif.\n\n') + html.escape(url),
-                               [[button(self.tr(uid,'📤 Partager mon invitation'),url=share)], [button(self.tr(uid,'⬅️ Accueil'),'home')]])
+        if page == 'invite' or page.startswith('invite:'): return self.invitation_screen(uid,page.partition(':')[2] or None)
         if page == 'unban':
             if user['banned']:
                 target = int(self.db.setting('unban_goal','10'))
@@ -54,7 +49,7 @@ class Screens:
             if user['banned']: return self.show(uid,'unban')
             self.metric('view',uid,g['id'],key=f'view:{uid}:{g["id"]}:{int(time.time()//3600)}')
             a = self.access(uid,g['id'])
-            n = max(0,self.count(uid)-(a['base'] if a else 0))
+            n = max(0,self.count(uid,g['id'])-(a['base'] if a else 0))
             if g['role'] in ('chat','always') and not self.entitled(uid,g) and n >= g['goal']:
                 self.grant(uid,g,'referral')
             description=self.db.setting('description:'+g['id']+':'+self.language(uid),g['description']).strip() or self.tr(uid,'La présentation de ce groupe est en cours de préparation.')
@@ -70,8 +65,8 @@ class Screens:
                 if not used: rows += [[button(self.tr(uid,'👀 Commencer ma visite'), 'proof:'+g['id'])]]
             else:
                 if g['role'] != 'vip':
-                    text += self.tr(uid,'<b>🎯 TON ACCÈS</b>\n<code>')+progress(n,g['goal']).split('\n')[0]+'</code>\n<b>'+str(n)+' / '+str(g['goal'])+self.tr(uid,' invitations validées</b>\nEncore ')+str(max(0,g['goal']-n))+self.tr(uid,' pour débloquer ce groupe.\n\n')
-                    rows += [[button(self.tr(uid,'🔗 Inviter mes amis'),'invite')]]
+                    text += self.tr(uid,'<b>🎯 TON ACCÈS</b>\n<code>')+progress(n,g['goal']).split('\n')[0]+'</code>\n<b>'+str(n)+' / '+str(g['goal'])+self.tr(uid,' crédits d’invitation</b>\nEncore ')+str(max(0,g['goal']-n))+self.tr(uid,' pour débloquer ce groupe.\n\n')
+                    rows += [[button(self.tr(uid,'🔗 Inviter mes amis'),'invite:'+g['id'])]]
                 pending = self.db.one("SELECT id FROM manual_orders WHERE uid=? AND gid=? AND status IN ('awaiting_proof','review')",(uid,g['id']))
                 if self.payment_options(g['id']) or pending:
                     label = self.tr(uid,'⏳ Reprendre mon paiement') if pending else (self.tr(uid,'⚡ Accès coupe-file') if g['role']!='vip' else self.tr(uid,'💳 Obtenir cet accès'))
@@ -88,7 +83,8 @@ class Screens:
                      [button('💳 Paiements','payments'),button('⚙️ Moyens de paiement','payconfig')],
                      [button('📝 Texte coupe-file','setting:fastpass_description')],
                      [button('🖼 Accueil et traductions','welcomeconfig')],
-                     [button('🚫 Mots interdits','setting:words')],
+                     [button('🚫 Mots interdits','words')],
+                     [button('🐞 Signalements','bugs')],
                      [button(self.tr(uid,'🔗 Inviter mes amis'),'invite'),button('👤 Vue membre','member')],
                      [button(self.tr(uid,'🔄 Actualiser'),'admin')]]
             return self.screen(uid,'<b>🛠 Administration du réseau</b>\nAjoute le bot administrateur à un supergroupe pour le connecter.\n\n<i>Actualisé le '+self.time_label(time.time())+'</i>',rows)
@@ -130,6 +126,7 @@ class Screens:
                 except Exception as error:
                     self.record_failure('admin_lookup:'+g['id'],error)
         text+=self.tr(uid,'\n\n<i>Accueil actualisé le ')+self.time_label(time.time())+'</i>'
+        rows += [[button(self.tr(uid,'🐞 Signaler un bug · +5'),'bug')]]
         rows += [[button(self.tr(uid,'🌐 Langue'),'language'),button(self.tr(uid,'🔄 Actualiser'),'member')]]
         return self.screen(uid,text,rows,photo=self.db.setting('welcome_photo') or None)
 
