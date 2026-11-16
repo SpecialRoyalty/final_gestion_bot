@@ -531,3 +531,14 @@ Les erreurs réseau sont présentées comme des connexions interrompues, jamais 
 ### Validation
 
 Les tests couvrent l’attribution par groupe, la validation cascade, les retours sans double crédit, la régénération et son échec, les décisions de bugs idempotentes, les autorisations, les annonces bloquantes, leur persistance, les suppressions ciblées et les coupures réseau. Les requêtes de schéma et de transition sont aussi vérifiées sur PostgreSQL 16.2 en mode local sans serveur réseau. Le bot Telegram en production n’est pas accessible dans cet environnement ; les appels Telegram des tests sont simulés.
+
+
+## Version 11 — interfaces simplifiées et annonces restaurées
+
+- Les compteurs membres affichent **invitations validées**, et les récompenses de bugs parlent de **+5 invitations**. La distinction comptable des invitations réelles et des bonus reste intacte.
+- Langues : 🇫🇷 Français, 🇬🇧 English, 🇮🇹 Italiano, 🇪🇸 Español.
+- L’annonce de statut du groupe fait l’objet d’une vérification d’existence environ toutes les 60 secondes, au prochain cycle du planificateur. Si Telegram confirme sa suppression, le bot la republie. Une panne réseau ne déclenche pas une seconde publication. Une annonce intacte n’est pas renvoyée et le rythme des paliers reste inchangé. Ce rétablissement n’est pas instantané : Telegram ne fournit pas ici de notification de suppression.
+- **Publicités → Ajouter une publicité** : choix de fréquence par boutons (2, 4, 6 ou 12 heures), envoi du texte ou de la photo légendée, aperçu puis confirmation. Aucun préfixe horaire à saisir. La publicité est enregistrée uniquement après confirmation ; annuler invalide le brouillon. Le contenu est limité à 800 caractères pour rester compatible avec l’aperçu illustré. Les annonces existantes restent conservées.
+- La liste des publicités indique l’intervalle et permet la pause/réactivation.
+- Le jour d’ouverture se choisit par son nom avec des boutons. Les autres réglages posent des questions précises plutôt que d’afficher des noms techniques de champs.
+- Tests supplémentaires : message supprimé/restauré, panne réseau sans doublon, publicité illustrée avec validation unique, annulation et droits d’administration, sélection du jour et drapeaux.
