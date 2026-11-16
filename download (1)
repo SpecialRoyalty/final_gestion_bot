@@ -1,5 +1,7 @@
+.git
 .env
+.venv
+__pycache__
+**/__pycache__
 *.db
-__pycache__/
-*.pyc
-.venv/
+*.zip

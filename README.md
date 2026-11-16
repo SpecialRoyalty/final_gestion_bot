@@ -104,7 +104,7 @@ Le token ne doit jamais être commité ni envoyé dans cette conversation.
 - Le remplacement de groupe conserve l'identité logique. **Retirer/révoquer les anciens liens et fermer
   l'ancien groupe** si vous en avez encore le contrôle. Ne pas réutiliser un groupe déjà actif comme remplaçant.
 - Les publicités VIP utilisent l'outil publicitaire commun. Une interface dédiée pour lier plusieurs
-  campagnes à un VIP, un mode « une seule fois » et une image de couverture du portail restent à ajouter.
+  campagnes à un VIP, et un mode « une seule fois » restent à ajouter. L’image du portail est disponible depuis la version 6.
 - Les compteurs ne s'animent pas en continu ; ils sont recalculés lors de la navigation/actualisation.
 - Les calendriers sont persistés à l'avance : changer l'horaire d'un groupe modifie sa fenêtre planifiée.
 - Les traductions, le filtrage par alphabet et l'exclusion selon une langue supposée ne sont pas implémentés.
@@ -303,3 +303,88 @@ Vérification : 71 tests locaux réussis ; 6 tests réseau PostgreSQL non exécu
 Les nouveaux tests couvrent tous les rôles, l’activation sans groupe de chat, le refus de permissions,
 les erreurs de publication, le rafraîchissement sans doublon, la récupération d’un message supprimé,
 les anciens boutons et les appels répétés de `/start`.
+
+## Version 6 — supervision, statistiques et présentation
+
+### Statistiques et interprétation
+
+Administration → **Statistiques** : fenêtres de 24 heures, 7 et 30 jours, avec pagination.
+Le panneau affiche utilisateurs connus, invitations validées et en attente, visiteurs uniques de
+chaque fiche, accès accordés, entrées/sorties observées, membres suivis et paiements à vérifier.
+Les montants approuvés manuellement sont séparés par devise : EUR et USDT ne sont jamais additionnés.
+Des pistes d’action fondées sur les chiffres sont affichées (description manquante, visiteurs sans
+accès accordé sur la période, sorties supérieures aux entrées, attente de validation >24 h).
+Ce sont des pistes à examiner, pas une démonstration de causalité ou une prévision commerciale.
+
+L’historique d’événements commence lors de cette mise à jour ; les anciennes visites et adhésions
+non enregistrées ne sont pas reconstituées. Le panneau distingue ces événements des totaux actuels.
+Les visiteurs de fiche sont dédupliqués par utilisateur pour la période. Les entrées/sorties sont
+celles reçues par le bot, pas un recensement rétroactif de Telegram. Les statistiques globales et
+les diagnostics sont réservés aux responsables OWNER_IDS.
+
+### Contrôles de fonctionnement
+
+Administration → **État du réseau** affiche :
+
+- connexion DB et dernière réception Telegram réussie ;
+- dernier cycle terminé, tâches en erreur et dernière activité du traitement média ;
+- files d’actions/médias en attente et en reprise ;
+- accès expirés restant à révoquer, éventuels groupes classiques ouverts simultanément ;
+- dernière vérification du planning, dernière modification d’annonce et erreurs de chaque groupe.
+
+**Vérifier les groupes** demande un contrôle réel des droits, du nombre de membres et des
+permissions d’envoi (lorsque Telegram les retourne). Les contrôles sont effectués progressivement,
+un groupe par cycle, pour limiter les appels. Le bouton Actualiser recharge les résultats.
+Les contrôles ne modifient pas les droits ni les accès ; ils signalent les anomalies. Un résultat
+ancien conserve sa date, et une donnée jamais observée apparaît « jamais », jamais comme un succès.
+Un heartbeat récent ne garantit pas que toutes les opérations Telegram ont réussi.
+
+Les tâches de planification, parrainage, annonces, expiration, publicité et diagnostics sont isolées :
+l’échec d’une tâche n’empêche plus les suivantes de s’exécuter. La file d’actions dispose d’un budget
+par cycle ; la vérification des invitations utilise un curseur afin qu’un invité en erreur ne bloque
+pas tous les autres. Les erreurs enregistrées masquent les URL et tokens.
+
+### Compte à rebours
+
+Le message affiche maintenant la date/heure prévue et le fuseau configuré, ainsi qu’un compte à
+rebours précis en heures et minutes. Il est recalculé lors des cycles (~20 secondes hors latence
+Telegram) et édité seulement lorsque son contenu change. Toutes les cinq minutes au maximum,
+une édition de contrôle vérifie aussi qu’un message inchangé existe encore.
+Le planning persistant est recalculé à partir de l’heure actuelle après redémarrage.
+Les tests simulent notamment 00:44 → 09:05, les ouvertures/fermetures et les erreurs de parrainage.
+La cause exacte d’une annonce figée en production nécessite les résultats du panneau ou les logs ;
+les seules captures ne prouvent pas si le service était arrêté, bloqué ou mal configuré.
+
+### Portail et fiches
+
+- Portail → **Image du portail** : envoyer une photo Telegram. Le texte et les boutons accompagnent
+  la photo. L’ajout d’une image à un message texte existant et les remplacements de photo/texte
+  utilisent le même message Telegram. Limite de saisie du texte avec image : 800 unités UTF-16
+  pour réserver la place à l’annonce du groupe ouvert dans la légende Telegram.
+- Chat classique / 24 h/24 / VIP : description désormais obligatoire avant activation. Les groupes
+  déjà actifs restent actifs ; compléter leurs descriptions depuis leurs fiches administrateur.
+- **Nom affiché** permet de remplacer un titre générique comme CHAT dans l’interface du bot ;
+  cela ne renomme pas le groupe Telegram lui-même.
+- Fiche membre : nom, type, état ouvert/fermé, description, progression sur douze segments fins,
+  pourcentage, compteur et invitations restantes. La progression se recharge à la navigation ou
+  avec Actualiser. Les caractères et polices gardent le rendu natif du client Telegram.
+
+### Règle des liens et objectifs, conservée
+
+Un membre utilise un seul lien de parrainage actif vers le portail. Les invitations validées
+progressent **en parallèle** pour les groupes classiques et 24 h/24 ; elles ne sont pas consommées.
+Chaque groupe possède son propre seuil. Exemple : 24 h/24 à 3, chat A à 5, chat B à 10 → les accès
+se débloquent respectivement à 3, 5 puis 10 invitations validées. Il n’existe aucun ordre imposé.
+Chaque accès débloqué fournit ensuite son propre lien d’entrée avec contrôle d’identité.
+Les VIP restent payants. Après exclusion pour inactivité, la remise à zéro ne concerne que le groupe
+concerné : sa base de calcul repart du compteur courant, sans retirer les autres accès.
+
+### Migration et validation
+
+La migration additive `003_metrics.sql` est embarquée dans le module Python comme les précédentes.
+Elle ajoute une table d’événements et ses index. Les anciennes migrations gardent leurs empreintes.
+Aucune remise à zéro des utilisateurs, invitations, droits ou paiements.
+
+Résultats : **90 tests locaux réussis**, 6 tests réseau PostgreSQL non exécutés dans cet environnement.
+Les trois scénarios SQL PostgreSQL 16.2 ont été rejoués avec la nouvelle table statistique.
+Aucun accès à la base Railway ni test réel Telegram réalisé ici ; vérifier le panneau après déploiement.
