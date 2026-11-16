@@ -168,7 +168,8 @@ class Scheduler:
                         if not qualifies: continue
                     with self.db.transaction():
                         self.db.run('UPDATE referrals SET valid=1 WHERE invitee=?',(r['invitee'],))
-                        self.metric('referral_valid',r['inviter'],portal['id'],key='valid:'+str(r['invitee']))
+                        target=self.db.one('SELECT gid FROM referral_targets WHERE invitee=?',(r['invitee'],))
+                        self.metric('referral_valid',r['inviter'],target['gid'] if target else portal['id'],key='valid:'+str(r['invitee']))
                 except Exception as error:
                     errors.append(type(error).__name__)
         if errors: raise RuntimeError(f'{len(errors)} invitations non vérifiées : '+', '.join(sorted(set(errors))))
@@ -272,7 +273,7 @@ class Scheduler:
                 with self.db.transaction():
                     self.enqueue('banChatMember',dict(chat_id=g['chat'],user_id=m['uid'],_unless_entitled=g['id']))
                     self.db.run('UPDATE members SET present=0 WHERE uid=? AND gid=?',(m['uid'],g['id']))
-                    self.db.run('UPDATE access SET revoked=1,base=? WHERE uid=? AND gid=?',(self.count(m['uid']),m['uid'],g['id']))
+                    self.db.run('UPDATE access SET revoked=1,base=? WHERE uid=? AND gid=?',(self.count(m['uid'],g['id']),m['uid'],g['id']))
             elif not m['warned']:
                 self.enqueue('sendMessage',dict(chat_id=m['uid'],text=self.tr(m['uid'],'⚠️ Partage un média dans ')+g['title']+self.tr(m['uid'],' avant demain pour conserver ton accès.')))
                 self.db.run('UPDATE members SET warned=1 WHERE uid=? AND gid=?',(m['uid'],g['id']))

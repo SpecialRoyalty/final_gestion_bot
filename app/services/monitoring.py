@@ -146,6 +146,8 @@ class Monitoring:
                f'Invitations validées (total) : {count("SELECT COUNT(*) AS n FROM referrals WHERE valid=1")}',
                f'Invitations en attente : {count("SELECT COUNT(*) AS n FROM referrals WHERE valid=0 AND present=1")}',
                f'Accès actifs maintenant : {count("SELECT COUNT(*) AS n FROM access a LEFT JOIN users u ON u.id=a.uid WHERE a.revoked=0 AND (a.expires IS NULL OR a.expires>?) AND COALESCE(u.banned,0)=0 AND COALESCE(u.permanent,0)=0",(now,))}']
+        lines.append('Signalements en attente : '+str(count("SELECT COUNT(*) AS n FROM bug_tickets WHERE status='pending'")))
+        lines.append('Crédits de bugs attribués (distincts des invitations) : '+str(5*count("SELECT COUNT(*) AS n FROM bug_tickets WHERE status='approved'")))
         validated=count("SELECT COUNT(*) AS n FROM metric_events WHERE kind='referral_valid' AND created>=?",(since,))
         lines.append(f'Invitations validées enregistrées sur la période : {validated}')
         pending=count("SELECT COUNT(*) AS n FROM manual_orders WHERE status='review'")

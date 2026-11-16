@@ -53,8 +53,13 @@ class Moderation:
                 link=self.db.one('SELECT * FROM links WHERE url=? AND purpose=?',
                                  (q.get('invite_link',{}).get('invite_link',''),'referral'))
                 if link and link['uid']!=uid and link['expires']>time.time():
-                    self.db.run('INSERT INTO referrals(invitee,inviter,joined) VALUES (?,?,?) ON CONFLICT(invitee) DO UPDATE SET present=1,joined=excluded.joined',
-                                (uid,link['uid'],time.time()))
+                    with self.db.transaction():
+                        existing=self.db.one('SELECT invitee FROM referrals WHERE invitee=?',(uid,))
+                        self.db.run('INSERT INTO referrals(invitee,inviter,joined) VALUES (?,?,?) ON CONFLICT(invitee) DO UPDATE SET present=1,joined=excluded.joined',
+                                    (uid,link['uid'],time.time()))
+                        target=self.db.one('SELECT gid FROM target_links WHERE url=?',(link['url'],))
+                        if not existing and target:
+                            self.db.run('INSERT INTO referral_targets(invitee,gid) VALUES (?,?) ON CONFLICT DO NOTHING',(uid,target['gid']))
                 else:
                     self.db.run('UPDATE referrals SET present=1,joined=? WHERE invitee=?',(time.time(),uid))
             elif g['role'] in ('chat','always'):

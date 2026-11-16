@@ -11,6 +11,7 @@ class Context:
         self.me = api.call('getMe')
         self.last_tick = 0
         self._fresh_panels=set()
+        self.initialize_member_workflows()
         if not self.db.setting('metrics:since'): self.db.set('metrics:since',time.time())
 
     def install_command_menu(self):
@@ -99,8 +100,14 @@ class Context:
                 self.enqueue('editMessageReplyMarkup',dict(chat_id=uid,message_id=old_menu,reply_markup={'inline_keyboard':[]}))
                 self.record_failure('panel_cleanup',error)
 
-    def count(self, uid):
-        return self.db.one('SELECT COUNT(*) AS n FROM referrals WHERE inviter=? AND valid=1', (uid,))['n']
+    def count(self, uid, gid=None):
+        if gid is None:
+            real=self.db.one('SELECT COUNT(*) AS n FROM referrals WHERE inviter=? AND valid=1',(uid,))['n']
+            bonus=self.db.one("SELECT COUNT(*) AS n FROM bug_tickets WHERE uid=? AND status='approved'",(uid,))['n']
+        else:
+            real=self.db.one('SELECT COUNT(*) AS n FROM referrals r JOIN referral_targets t ON t.invitee=r.invitee WHERE r.inviter=? AND r.valid=1 AND t.gid=?',(uid,gid))['n']
+            bonus=self.db.one("SELECT COUNT(*) AS n FROM bug_tickets WHERE uid=? AND gid=? AND status='approved'",(uid,gid))['n']
+        return real+5*bonus
 
     def access(self, uid, gid):
         return self.db.one('SELECT * FROM access WHERE uid=? AND gid=?', (uid, gid))
