@@ -20,6 +20,7 @@ def main():
     api=Telegram(token)
     app=App(db,api,owners,os.getenv('TIMEZONE','Europe/Paris'),os.getenv('SUPPORT_CONTACT','Administrateur'))
     api.call('deleteWebhook',drop_pending_updates=False)
+    app.install_command_menu()
     allowed=['message','edited_message','callback_query','chat_member','my_chat_member','chat_join_request','pre_checkout_query']
     from .services.media import run_worker
     stop=threading.Event()
@@ -28,7 +29,6 @@ def main():
     logging.info('Bot démarré. Réception des événements Telegram active ; /start et navigation disponibles.')
     while True:
         try:
-            app.tick()
             offset=int(db.setting('offset','0'))
             updates=api.call('getUpdates',offset=offset,timeout=10,allowed_updates=allowed)
             db.set('poll:ok',time.time())
@@ -45,6 +45,7 @@ def main():
                     if e.code==429 or e.code>=500: raise
                     app.alert('Mise à jour à vérifier : '+str(e))
                 db.set('offset',update['update_id']+1)
+            app.tick()
         except KeyboardInterrupt:
             stop.set()
             worker.join(timeout=5)
