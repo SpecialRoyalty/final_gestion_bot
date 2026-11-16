@@ -489,3 +489,18 @@ Le bannissement selon l’alphabet arabe ou cyrillique du nom n’est pas implé
 Validation : **112 tests locaux réussis**, 6 tests réseau PostgreSQL non exécutés ici.
 Pas de nouvelle migration SQL. Les tests couvrent aussi l’échec d’envoi du nouveau panneau,
 le refus de suppression de l’ancien et la conservation des preuves.
+
+
+## Version 9 — annonces par paliers, accueil et langues
+
+Cette section remplace les indications antérieures sur le décompte précis en minutes.
+
+- Les annonces de statut des groupes sont supprimées puis republiées au changement de palier, jamais éditées. Une annonce identique reste en place, y compris après redémarrage. Si la suppression échoue, aucune nouvelle annonce n’est envoyée. Si l’envoi échoue après suppression, le cycle suivant réessaie.
+- Ouverture : heures, puis 30, 10, 5, 4, 3, 2 et 1 minute. Fermeture : 30, 15, 5, 4, 3, 2 et 1 minute. Gratuit hebdomadaire : jours, heures, puis 30, 15, 10, 5, 4, 3, 2 et 1 minute. Les heures lointaines sont approximatives ; la date et l’heure prévues restent affichées. Le cycle vérifie les paliers toutes les 20 secondes environ, selon la réponse Telegram ; aucun rattrapage des annonces passées n’est publié.
+- `/start` publie un panneau récent et retire le précédent. Les boutons actualisent le panneau courant ; le passage image/texte recrée le panneau et retire l’ancien. Une suppression privée impossible désactive les boutons de l’ancien panneau et apparaît dans les diagnostics.
+- Administration → **Accueil et traductions** : texte d’accueil par langue (500 caractères UTF-16), image commune facultative, description de chaque groupe par langue et texte coupe-file commun par langue. Envoyer un tiret à la place du texte rétablit le contenu par défaut. **Retirer l’image** rétablit l’accueil texte.
+- **Langue** : Français, English, Italiano, Español. Le choix individuel est conservé en base, y compris après redémarrage. Les écrans membres, invitations, étapes de paiement, erreurs de preuve et notifications de paiement utilisent cette langue. Les titres et descriptions personnalisés ne sont pas traduits automatiquement ; une description sans version locale reprend celle du groupe. L’accueil et le coupe-file utilisent leur texte traduit par défaut si aucun texte local n’a été saisi. L’administration et les annonces publiques restent en français. Les pages externes suivent leurs propres réglages linguistiques.
+- Les droits d’accès et liens restent identiques quand la langue change. Aucune nouvelle migration de schéma : les réglages sont stockés dans la table existante `settings`.
+- Aucun bannissement fondé sur l’alphabet du nom ou du pseudonyme n’est ajouté.
+
+Tests : paliers et absence de répétition, ordre suppression/envoi, reprise après échec, autorisation des réglages, accueil illustré et transitions texte/photo, persistance des langues, navigation et paiements dans chaque langue. Les tests Telegram utilisent un simulateur ; ils ne certifient pas un déploiement réel.
