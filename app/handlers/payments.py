@@ -7,19 +7,19 @@ class PaymentScreens:
         o=self.db.one('SELECT * FROM manual_orders WHERE id=? AND uid=?',(oid,uid))
         if not o: return self.show(uid)
         rows=[]
-        text=f'<b>💳 {METHODS[o["method"]][0]}</b>\nRéférence : <code>{o["id"]}</code>\n\n'
+        text='<b>💳 '+METHODS[o['method']][0]+'</b>\n'+self.tr(uid,'Référence : ')+'<code>'+o['id']+'</code>\n\n'
         if o['status']=='awaiting_proof':
-            text+=f'Base : {money(o["base"],o["currency"])}\nSupplément : {o["fee"]} %\n<b>Total : {money(o["total"],o["currency"])}</b>\n\n'
-            text+='Destinataire :\n'+html.escape(o['destination'])+'\n\n'
-            if o['method']=='usdt': text+='Réseau : <b>TRC20 uniquement</b>. Le montant USDT est fixé par l’administrateur.\n\n'
-            text+='Effectue le paiement, puis envoie une capture avec le bouton ci-dessous.'
-            rows=[[btn('📎 Envoyer ma preuve','proofpay:'+oid)], [btn('Annuler — je n’ai pas payé','cancelpay:'+oid)]]
-        elif o['status']=='review': text+='⏳ Preuve reçue. Un administrateur vérifie ton paiement.'
-        elif o['status']=='approved': text+='✅ Paiement validé.'; rows=[[btn('🚪 Mon accès','g:'+o['gid'])]]
-        elif o['status']=='rejected': text+='❌ Paiement refusé. Contacte le support si tu as effectué le transfert.'
-        elif o['status']=='conflict': text+='Ton paiement doit être régularisé par le support : ton accès ou le groupe a changé.'
-        else: text+='Demande annulée.'
-        rows += [[btn('🔄 Actualiser','paystatus:'+oid),btn('⬅️ Retour','g:'+o['gid'])]]
+            text+=self.tr(uid,'Base : ')+money(o['base'],o['currency'])+'\n'+self.tr(uid,'Supplément : ')+str(o['fee'])+' %\n<b>'+self.tr(uid,'Total : ')+money(o['total'],o['currency'])+'</b>\n\n'
+            text+=self.tr(uid,'Destinataire :\n')+html.escape(o['destination'])+'\n\n'
+            if o['method']=='usdt': text+=self.tr(uid,'Réseau : <b>TRC20 uniquement</b>. Le montant USDT est fixé par l’administrateur.\n\n')
+            text+=self.tr(uid,'Effectue le paiement, puis envoie une capture avec le bouton ci-dessous.')
+            rows=[[btn(self.tr(uid,'📎 Envoyer ma preuve'),'proofpay:'+oid)], [btn(self.tr(uid,'Annuler — je n’ai pas payé'),'cancelpay:'+oid)]]
+        elif o['status']=='review': text+=self.tr(uid,'⏳ Preuve reçue. Un administrateur vérifie ton paiement.')
+        elif o['status']=='approved': text+=self.tr(uid,'✅ Paiement validé.'); rows=[[btn(self.tr(uid,'🚪 Mon accès'),'g:'+o['gid'])]]
+        elif o['status']=='rejected': text+=self.tr(uid,'❌ Paiement refusé. Contacte le support si tu as effectué le transfert.')
+        elif o['status']=='conflict': text+=self.tr(uid,'Ton paiement doit être régularisé par le support : ton accès ou le groupe a changé.')
+        else: text+=self.tr(uid,'Demande annulée.')
+        rows += [[btn(self.tr(uid,'🔄 Actualiser'),'paystatus:'+oid),btn(self.tr(uid,'⬅️ Retour'),'g:'+o['gid'])]]
         self.screen(uid,text,rows)
 
     def payment_review(self,uid,oid):
@@ -40,7 +40,7 @@ class PaymentScreens:
             o=self.db.one("SELECT id FROM manual_orders WHERE id=? AND uid=? AND status='awaiting_proof'",(parts[1],uid))
             if o:
                 self.db.run('UPDATE users SET pending=? WHERE id=?',('paymentproof:'+parts[1],uid))
-                self.screen(uid,'📎 Envoie maintenant ta capture d’écran.',[[btn('⬅️ Retour','paystatus:'+parts[1])]])
+                self.screen(uid,self.tr(uid,'📎 Envoie maintenant ta capture d’écran.'),[[btn(self.tr(uid,'⬅️ Retour'),'paystatus:'+parts[1])]])
         elif action=='cancelpay':
             self.db.run("UPDATE manual_orders SET status='cancelled' WHERE id=? AND uid=? AND status='awaiting_proof'",(parts[1],uid))
             self.payment_page(uid,parts[1])
@@ -61,7 +61,7 @@ class PaymentScreens:
             for method,(name,currency,fee) in METHODS.items():
                 p=self.db.one('SELECT cents FROM payment_prices WHERE gid=? AND method=?',(g['id'],method))
                 rows.append([btn(name+' : '+(money(p['cents'],currency) if p else 'non configuré'),f'price:{g["id"]}:{method}')])
-            self.screen(uid,'<b>Prix de base</b>\nLes 15 % sont ajoutés automatiquement pour PayPal et Revolut. USDT possède son propre montant.',rows+[[btn('⬅️ Retour','a:'+g['id'])]])
+            self.screen(uid,'<b>Prix de base</b>\nLes 15 % sont ajoutés automatiquement pour PayPal et Revolut. USDT possède son propre montant.',rows+[[btn(self.tr(uid,'⬅️ Retour'),'a:'+g['id'])]])
         elif action=='price':
             g=self.group(parts[1])
             if not g or not self.admin(uid,g) or not allows(g['role'],'prices') or parts[2] not in METHODS: return True

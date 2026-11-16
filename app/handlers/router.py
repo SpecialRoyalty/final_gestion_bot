@@ -26,7 +26,7 @@ class Router:
         if m.get('successful_payment'): return self.paid(uid,m['successful_payment'])
         text=m.get('text','')
         if text.startswith('/paysupport') or text.startswith('/support'):
-            return self.screen(uid,'Assistance : '+html.escape(self.support),[[button('⬅️ Accueil','home')]])
+            return self.screen(uid,self.tr(uid,'Assistance : ')+html.escape(self.support),[[button(self.tr(uid,'⬅️ Accueil'),'home')]])
         command=text.split(maxsplit=1)[0] if text.strip() else ''
         if command.split('@')[0]=='/start' and ('@' not in command or command.split('@',1)[1].casefold()==self.me['username'].casefold()):
             self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))

@@ -25,6 +25,7 @@ class Callbacks:
         if q.get('message',{}).get('chat',{}).get('id')!=uid: return
         if self.user(uid)['permanent']: return self.show(uid)
         self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
+        if self.welcome_callback(uid,data): return
         if self.readiness_callback(uid,data): return
         if self.monitoring_callback(uid,data): return
         if self.payment_callback(uid,data): return
@@ -126,6 +127,7 @@ class Callbacks:
         return self.show(uid,data)
 
     def input(self,uid,m,pending):
+        if self.welcome_input(uid,m,pending): return
         if self.payment_input(uid,m,pending): return
         parts=pending.split(':'); action=parts[0]
         value=m.get('text',m.get('caption','')).strip()
@@ -177,7 +179,7 @@ class Callbacks:
                         self.db.run('UPDATE members SET present=0 WHERE gid=?',(g['id'],))
                     for a in self.db.all('SELECT * FROM access WHERE gid=? AND revoked=0',(g['id'],)):
                         if active_access(a,time.time()):
-                            self.enqueue('sendMessage',dict(chat_id=a['uid'],text='Ton groupe a été remplacé. Ton accès est conservé.',reply_markup=keyboard([button('🚪 Retrouver mon accès',url=self.deep('g_'+g['id']))])))
+                            self.enqueue('sendMessage',dict(chat_id=a['uid'],text=self.tr(a['uid'],'Ton groupe a été remplacé. Ton accès est conservé.'),reply_markup=keyboard([button(self.tr(a['uid'],'🚪 Retrouver mon accès'),url=self.deep('g_'+g['id']))])))
                     value=str(value)
                 elif field=='title':
                     if not value or len(value)>100: raise ValueError('Nom affiché requis, maximum 100 caractères.')
