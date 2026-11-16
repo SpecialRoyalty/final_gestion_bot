@@ -218,6 +218,13 @@ EXPECTED = {'access': {'columns': [{'name': 'uid', 'type': 'BIGINT'},
 MIGRATIONS += (("003_metrics.sql", "CREATE TABLE IF NOT EXISTS metric_events (id TEXT PRIMARY KEY, kind TEXT NOT NULL, uid BIGINT, gid TEXT, created DOUBLE PRECISION NOT NULL); CREATE INDEX IF NOT EXISTS metric_time_kind ON metric_events(created,kind); CREATE INDEX IF NOT EXISTS metric_group_time ON metric_events(gid,created);"),)
 EXPECTED['metric_events']={'columns':[{'name':name,'type':kind} for name,kind in [('id','TEXT'),('kind','TEXT'),('uid','BIGINT'),('gid','TEXT'),('created','DOUBLE PRECISION')]]}
 
+MIGRATIONS += (("004_member_workflows.sql", "CREATE TABLE IF NOT EXISTS referral_targets (invitee BIGINT PRIMARY KEY, gid TEXT NOT NULL); CREATE TABLE IF NOT EXISTS target_links (url TEXT PRIMARY KEY, gid TEXT NOT NULL); CREATE TABLE IF NOT EXISTS bug_tickets (id TEXT PRIMARY KEY, uid BIGINT NOT NULL, gid TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created DOUBLE PRECISION NOT NULL, reviewed_by BIGINT, reviewed_at DOUBLE PRECISION); CREATE TABLE IF NOT EXISTS group_launches (gid TEXT PRIMARY KEY, created DOUBLE PRECISION NOT NULL); CREATE TABLE IF NOT EXISTS launch_reads (uid BIGINT NOT NULL, gid TEXT NOT NULL, PRIMARY KEY(uid,gid)); CREATE INDEX IF NOT EXISTS referral_target_group ON referral_targets(gid); CREATE INDEX IF NOT EXISTS bug_status_time ON bug_tickets(status,created); CREATE INDEX IF NOT EXISTS bug_user_group ON bug_tickets(uid,gid,status);"),)
+EXPECTED['referral_targets']={'columns': [{'name': 'invitee', 'type': 'BIGINT'}, {'name': 'gid', 'type': 'TEXT'}]}
+EXPECTED['target_links']={'columns': [{'name': 'url', 'type': 'TEXT'}, {'name': 'gid', 'type': 'TEXT'}]}
+EXPECTED['bug_tickets']={'columns': [{'name': 'id', 'type': 'TEXT'}, {'name': 'uid', 'type': 'BIGINT'}, {'name': 'gid', 'type': 'TEXT'}, {'name': 'body', 'type': 'TEXT'}, {'name': 'status', 'type': 'TEXT'}, {'name': 'created', 'type': 'DOUBLE PRECISION'}, {'name': 'reviewed_by', 'type': 'BIGINT'}, {'name': 'reviewed_at', 'type': 'DOUBLE PRECISION'}]}
+EXPECTED['group_launches']={'columns': [{'name': 'gid', 'type': 'TEXT'}, {'name': 'created', 'type': 'DOUBLE PRECISION'}]}
+EXPECTED['launch_reads']={'columns': [{'name': 'uid', 'type': 'BIGINT'}, {'name': 'gid', 'type': 'TEXT'}]}
+
 class SchemaMismatch(RuntimeError):
     pass
 
