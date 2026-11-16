@@ -1,4 +1,5 @@
 from app.services.context import Context
+from app.services.monitoring import Monitoring
 from app.handlers.screens import Screens
 from app.handlers.callbacks import Callbacks
 from app.handlers.legacy_payments import LegacyPayments
@@ -9,6 +10,6 @@ from app.services.scheduler import Scheduler
 from app.services.payments import ManualPayments
 
 
-class App(Context, Screens, Callbacks, LegacyPayments, Router,
+class App(Monitoring, Context, Screens, Callbacks, LegacyPayments, Router,
           Moderation, Scheduler, ManualPayments, PaymentScreens):
     """Composition root: handlers, services and adapters share one application context."""

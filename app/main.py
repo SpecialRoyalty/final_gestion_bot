@@ -31,6 +31,7 @@ def main():
             app.tick()
             offset=int(db.setting('offset','0'))
             updates=api.call('getUpdates',offset=offset,timeout=10,allowed_updates=allowed)
+            db.set('poll:ok',time.time())
             for update in updates:
                 try:
                     app.update(update)
@@ -50,7 +51,8 @@ def main():
             break
         except Exception as e:
             # Do not log raw request URLs: they contain BOT_TOKEN.
-            logging.error('Cycle interrompu (%s), nouvelle tentative dans 5 secondes',type(e).__name__)
+            try: app.record_failure('main',e)
+            except Exception: logging.error('Cycle interrompu (%s)',type(e).__name__)
             time.sleep(5)
 
 if __name__=='__main__': main()
