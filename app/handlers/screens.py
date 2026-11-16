@@ -1,4 +1,5 @@
 import html
+import time
 from urllib.parse import urlencode
 from app.utils.core import progress
 from app.keyboards.inline import button
@@ -15,7 +16,7 @@ class Screens:
             if not portal: return self.screen(uid, 'Le portail sera bientôt disponible.', [[button('⬅️ Accueil','home')]])
             url = self.link(uid, portal, 'referral')
             share = 'https://t.me/share/url?' + urlencode({'url':url,'text':'Rejoins notre portail !'})
-            return self.screen(uid, '<b>🔗 Invite tes amis</b>\n\nTon lien personnel mène au portail.\n' + html.escape(url),
+            return self.screen(uid, '<b>🔗 Invite tes amis</b>\n\nTon lien personnel mène au portail. Tes invitations font progresser les groupes classiques et 24 h/24 en parallèle, chacun avec son objectif.\n\n' + html.escape(url),
                                [[button('📤 Partager mon invitation',url=share)], [button('⬅️ Accueil','home')]])
         if page == 'unban':
             if user['banned']:
@@ -33,14 +34,17 @@ class Screens:
             g = self.group(page[2:])
             if not g or not g['enabled']: return self.show(uid)
             if user['banned']: return self.show(uid,'unban')
+            self.metric('view',uid,g['id'],key=f'view:{uid}:{g["id"]}:{int(time.time()//3600)}')
             a = self.access(uid,g['id'])
             n = max(0,self.count(uid)-(a['base'] if a else 0))
             if g['role'] in ('chat','always') and not self.entitled(uid,g) and n >= g['goal']:
                 self.grant(uid,g,'referral')
-            text = f'<b>{html.escape(g["title"])}</b>\n\n{html.escape(g["description"])}\n\n'
+            description=g['description'].strip() or 'La présentation de ce groupe est en cours de préparation.'
+            state='🟢 Ouvert' if g['opened'] else '🔴 Fermé'
+            text = f'<b>{html.escape(g["title"])}</b>\n{ROLE_LABELS.get(g["role"],g["role"])} · {state}\n\n{html.escape(description)}\n\n'
             rows = []
             if self.entitled(uid,g):
-                text += '✅ Ton accès est disponible.'
+                text += '✅ <b>Ton accès est débloqué.</b>'
                 rows += [[button('🚪 Rejoindre le groupe',url=self.link(uid,g))]]
             elif g['role'] == 'proof':
                 used = self.db.one('SELECT 1 FROM proof_used WHERE uid=? AND gid=?',(uid,g['id']))
@@ -48,7 +52,7 @@ class Screens:
                 if not used: rows += [[button('👀 Commencer ma visite', 'proof:'+g['id'])]]
             else:
                 if g['role'] != 'vip':
-                    text += progress(n,g['goal'])+' invitations validées\n'
+                    text += '<b>🎯 TON ACCÈS</b>\n<code>'+progress(n,g['goal']).split('\n')[0]+'</code>\n<b>'+str(n)+' / '+str(g['goal'])+' invitations validées</b>\nEncore '+str(max(0,g['goal']-n))+' pour débloquer ce groupe.\n\n'
                     rows += [[button('🔗 Inviter mes amis','invite')]]
                 pending = self.db.one("SELECT id FROM manual_orders WHERE uid=? AND gid=? AND status IN ('awaiting_proof','review')",(uid,g['id']))
                 if self.payment_options(g['id']) or pending:
@@ -60,7 +64,8 @@ class Screens:
         if page == 'admin' and uid in self.owners:
             rows = [[button(('✅ ' if g['enabled'] else '⚙️ ')+g['title'],'a:'+g['id'])]
                     for g in self.db.all('SELECT * FROM groups ORDER BY title')]
-            rows += [[button('🔗 Règle invitations','setting:referral_rule'),button('🔓 Débannissement','setting:unban_goal')],
+            rows += [[button('📊 Statistiques','stats:7'),button('🩺 État du réseau','health')],
+                     [button('🔗 Règle invitations','setting:referral_rule'),button('🔓 Débannissement','setting:unban_goal')],
                      [button('💳 Paiements','payments'),button('⚙️ Moyens de paiement','payconfig')],
                      [button('🚫 Mots interdits','setting:words')],[button('⬅️ Accueil','home')]]
             return self.screen(uid,'<b>🛠 Administration du réseau</b>\nAjoute le bot administrateur à un supergroupe pour le connecter.',rows)

@@ -13,6 +13,7 @@ class Callbacks:
         if q.get('message',{}).get('chat',{}).get('id')!=uid: return
         if self.user(uid)['permanent']: return self.show(uid)
         self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
+        if self.monitoring_callback(uid,data): return
         if self.payment_callback(uid,data): return
         parts=data.split(':'); action=parts[0]
         if action=='buy': return self.buy(uid,parts[1])
@@ -31,13 +32,17 @@ class Callbacks:
             prompt={'referral_rule':'Écris simple ou cascade.','unban_goal':'Envoie le nombre requis (1 à 10000).',
                     'words':'Envoie les termes interdits, un par ligne. Un tiret pour vider.'}[key]
             return self.screen(uid,prompt,[[button('⬅️ Annuler','admin')]])
-        if action in ('roles','role','slots','slot','toggle','edit','ads','adnew','adoff','publish'):
+        if action in ('roles','role','slots','slot','toggle','edit','ads','adnew','adoff','publish','portalphoto'):
             g=self.group(parts[1])
             if not g or not self.admin(uid,g): return
             feature={'slots':'slot','slot':'slot','ads':'ads','adnew':'ads','adoff':'ads'}.get(action)
             if action in ('edit','toggle') and len(parts)>2 and parts[2] not in ('chat','enabled'):
                 feature=parts[2]
             if feature and not allows(g['role'],feature): return self.show(uid,'a:'+g['id'])
+            if action=='portalphoto':
+                if g['role']!='portal': return self.show(uid,'a:'+g['id'])
+                self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
+                return self.screen(uid,'🖼 Envoie la photo à afficher avec le texte du portail.',[[button('⬅️ Annuler','a:'+g['id'])]])
             if action=='publish':
                 if g['role']=='portal' and g['enabled']: self.publish_portal(g,force=True)
                 return self.show(uid,'a:'+g['id'])
@@ -64,6 +69,8 @@ class Callbacks:
                 if field=='enabled':
                     if uid not in self.owners: return
                     if not g['enabled']:
+                        if g['role'] in ('chat','always','vip') and not g['description'].strip():
+                            return self.screen(uid,'📝 Ajoute une description avant d’activer ce groupe : elle sera visible par les membres.',[[button('📝 Description','edit:'+g['id']+':description'),button('⬅️ Retour','a:'+g['id'])]])
                         if g['role']=='unset' or (g['role']=='vip' and (not g['description'].strip() or not self.payment_options(g['id']))):
                             return self.screen(uid,'Complète le rôle, et pour un VIP la description et le prix.',[[button('⬅️ Retour','a:'+g['id'])]])
                         try:
@@ -80,7 +87,7 @@ class Callbacks:
                     self.publish_portal(self.group(g['id']),force=True)
             if action=='edit':
                 field=parts[2]
-                if field not in ('description','goal','price','threshold','rules','weekday','chat'): return
+                if field not in ('title','description','goal','price','threshold','rules','weekday','chat'): return
                 if field=='chat' and uid not in self.owners: return
                 self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
                 return self.screen(uid,'Envoie la nouvelle valeur pour <b>'+field+'</b>.\nPour remplacer un groupe : son identifiant Telegram négatif, après avoir ajouté le bot administrateur.',[[button('⬅️ Annuler','a:'+g['id'])]])
@@ -112,7 +119,12 @@ class Callbacks:
         else:
             g=self.group(parts[1])
             if not g or not self.admin(uid,g): return
-            if action=='adnew':
+            if action=='portalphoto':
+                if g['role']!='portal': return self.show(uid,'a:'+g['id'])
+                if not m.get('photo'): raise ValueError('Envoie une photo Telegram pour le portail.')
+                if len(g['description'].encode('utf-16-le'))//2>800: raise ValueError('Raccourcis d’abord le texte du portail à 800 caractères maximum pour ajouter une image.')
+                self.db.set('portal_photo:'+g['id'],m['photo'][-1]['file_id'])
+            elif action=='adnew':
                 if not allows(g['role'],'ads'): return self.show(uid,'a:'+g['id'])
                 hours,sep,body=value.partition('\n')
                 if hours not in ('2','4','6','12') or not body: raise ValueError('Première ligne : 2, 4, 6 ou 12. Puis le texte.')
@@ -146,8 +158,14 @@ class Callbacks:
                         if active_access(a,time.time()):
                             self.enqueue('sendMessage',dict(chat_id=a['uid'],text='Ton groupe a été remplacé. Ton accès est conservé.',reply_markup=keyboard([button('🚪 Retrouver mon accès',url=self.deep('g_'+g['id']))])))
                     value=str(value)
+                elif field=='title':
+                    if not value or len(value)>100: raise ValueError('Nom affiché requis, maximum 100 caractères.')
                 elif field not in ('description','rules'): return
                 elif len(value)>2500: raise ValueError('Maximum 2500 caractères.')
+                if field=='description':
+                    if g['role'] in ('chat','always','vip') and not value: raise ValueError('La description ne peut pas être vide.')
+                    if g['role']=='portal' and self.db.setting('portal_photo:'+g['id']) and len(value.encode('utf-16-le'))//2>800:
+                        raise ValueError('Texte avec image : maximum 800 caractères.')
                 if field!='chat': self.db.run(f'UPDATE groups SET {field}=? WHERE id=?',(value,g['id']))
             if g['role']=='portal' and g['enabled']: self.publish_portal(self.group(g['id']),force=True)
             page='a:'+g['id']
