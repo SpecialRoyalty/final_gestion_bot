@@ -4,11 +4,11 @@ ROLE_LABELS={'unset':'À configurer','portal':'Portail','chat':'Chat classique',
 ROLE_FIELDS={
     'unset':frozenset(),
     'portal':frozenset({'description'}),
-    'chat':frozenset({'description','goal','prices','locker','threshold','slot','rules','anti','ads'}),
-    'always':frozenset({'description','goal','prices','locker','threshold','rules','anti','ads'}),
-    'vip':frozenset({'description','prices','monthly','locker','threshold','rules','anti','ads'}),
-    'proof':frozenset({'description'}),
-    'free':frozenset({'description','locker','threshold','slot','weekday','rules','anti','ads'}),
+    'chat':frozenset({'title','description','goal','prices','locker','threshold','slot','rules','anti','ads'}),
+    'always':frozenset({'title','description','goal','prices','locker','threshold','rules','anti','ads'}),
+    'vip':frozenset({'title','description','prices','monthly','locker','threshold','rules','anti','ads'}),
+    'proof':frozenset({'title','description'}),
+    'free':frozenset({'title','description','locker','threshold','slot','weekday','rules','anti','ads'}),
 }
 WEEKDAYS=('Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche')
 

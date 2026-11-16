@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+import math
 import re
 import unicodedata
 
@@ -10,8 +11,8 @@ def progress(value, target):
     target = max(1, target)
     value = max(0, value)
     ratio = min(value / target, 1)
-    filled = int(ratio * 10)
-    return '🟩' * filled + '⬜' * (10-filled) + f' {int(ratio*100)} %\n{value} / {target}'
+    filled = int(ratio * 12)
+    return '▰' * filled + '▱' * (12-filled) + f'  {int(ratio*100)} %\n{value} / {target}'
 
 def member_present(member):
     return member['status'] in ('member', 'administrator', 'creator') or (
@@ -39,9 +40,12 @@ def forbidden(text, terms):
                for t in terms if t.strip())
 
 def countdown(seconds):
-    minutes = max(0, int(seconds // 60))
-    if minutes >= 1440: return f'{minutes // 1440} j'
-    if minutes >= 60: return f'{minutes // 60} h'
-    for n in (30, 15, 10, 5, 4, 3, 2, 1):
-        if minutes >= n: return f'{n} min'
+    minutes=max(0,math.ceil(seconds/60))
+    if minutes>=1440:
+        days,rest=divmod(minutes,1440)
+        return f'{days} j {rest//60} h'
+    if minutes>=60:
+        hours,rest=divmod(minutes,60)
+        return f'{hours} h {rest:02d} min'
+    if minutes: return f'{minutes} min'
     return 'moins d’une minute'
