@@ -432,3 +432,60 @@ réponse instantanée ni la confirmation de la cause exacte d’un incident non 
 
 Validation : **102 tests locaux réussis**, 6 tests réseau non exécutés ici, contrôle de l’archive
 et initialisation embarquée réussis. Pas de nouvelle migration SQL pour cette version.
+
+## Version 8 — accueil administrateur, texte coupe-file et panneau accessible
+
+### Administration directe
+
+`/start` sans lien ciblé ouvre directement le panneau réseau pour OWNER_IDS.
+Un administrateur Telegram d’un groupe connecté arrive sur un panneau limité aux groupes qu’il
+administre. Les simples membres gardent leur espace personnel. Les droits sont vérifiés à chaque
+opération ; ce changement d’accueil ne donne aucun nouveau droit.
+Les panneaux administrateur comprennent **Inviter mes amis** et **Vue membre**.
+Un lien ciblé vers une fiche ou une invitation conserve sa destination, même pour un administrateur.
+
+### Description commune du coupe-file
+
+Administration → **Texte coupe-file** : saisir le texte commun aux groupes classiques et 24 h/24,
+maximum 1800 caractères. Il apparaît à l’ouverture du choix de moyen de paiement. Un texte explicatif
+par défaut est disponible. Les descriptions propres aux groupes et VIP restent séparées.
+
+### Règle d’invitation par boutons
+
+Administration → Règle invitations affiche deux boutons, avec la règle active cochée :
+- **Simple** : l’invité reste au moins cinq minutes dans le portail.
+- **Cascade** : l’invité reste au moins cinq minutes et invite lui-même une personne restée cinq minutes.
+
+Les explications sont réservées aux responsables du réseau ; elles ne sont pas exposées aux membres.
+Les invitations déjà validées ne sont pas retirées lors d’un changement de règle.
+
+### Message récent après /start et preuve
+
+Cette version remplace volontairement le comportement des versions précédentes : `/start` envoie
+un nouveau panneau au bas de la conversation, enregistre son identifiant puis retire l’ancien.
+Les clics suivants continuent d’éditer ce panneau ; la navigation ne produit pas une pile de menus.
+Si l’envoi échoue, le pointeur vers l’ancien panneau est conservé. Si Telegram refuse la suppression
+de l’ancien message, le nouveau reste actif et une tâche tente de retirer les boutons de l’ancien.
+L’ancienne bulle peut donc rester dans l’historique lorsque Telegram interdit sa suppression.
+
+Après réception et sauvegarde d’une preuve, le panneau de suivi est lui aussi placé sous la capture.
+La capture de l’utilisateur n’est pas supprimée. Les responsables reçoivent la preuve séparément
+pour validation ; un échec de déplacement du panneau ne supprime ni la demande ni sa preuve.
+
+### Diagnostics et rotation
+
+« Description manquante » désigne réellement un champ vide dans la configuration du groupe.
+Compléter la description, puis relancer les contrôles si l’ancien rapport est encore affiché.
+La phrase générique « Historique des membres incomplet si le bot était absent » n’est plus
+présentée dans le rapport de chaque groupe : une note informative globale précise que seuls les
+événements reçus par le bot alimentent l’historique. Elle ne prouve pas une panne ou une absence.
+
+La rotation n’est pas aléatoire : le groupe le moins récemment ouvert est privilégié, en excluant
+le groupe planifié la veille lorsqu’un autre groupe existe. Les journées déjà planifiées restent
+persistantes et les groupes gratuits/24 h/24 suivent leurs propres règles.
+
+Le bannissement selon l’alphabet arabe ou cyrillique du nom n’est pas implémenté.
+
+Validation : **112 tests locaux réussis**, 6 tests réseau PostgreSQL non exécutés ici.
+Pas de nouvelle migration SQL. Les tests couvrent aussi l’échec d’envoi du nouveau panneau,
+le refus de suppression de l’ancien et la conservation des preuves.
