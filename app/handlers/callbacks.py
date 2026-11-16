@@ -7,6 +7,18 @@ from app.utils.group_roles import allows, ROLE_LABELS
 from app.keyboards.inline import button, keyboard
 
 class Callbacks:
+    def show_referral_settings(self,uid):
+        if uid not in self.owners: return
+        current=self.db.setting('referral_rule','simple')
+        text=('<b>🔗 Validation des invitations</b>\n\n'
+              '<b>Simple</b> — l’invité reste au moins 5 minutes dans le portail.\n\n'
+              '<b>Cascade</b> — l’invité reste au moins 5 minutes et invite lui-même une personne restée au moins 5 minutes.\n\n'
+              'Ces critères sont internes : ils ne sont pas affichés aux membres. Les invitations déjà validées restent acquises.')
+        rows=[[button(('✅ ' if current=='simple' else '')+'Simple','referralrule:simple'),
+               button(('✅ ' if current=='cascade' else '')+'Cascade','referralrule:cascade')],
+              [button('⬅️ Administration','admin')]]
+        self.screen(uid,text,rows)
+
     def callback(self,q):
         uid=q['from']['id']; data=q.get('data','home')
         self.api.call('answerCallbackQuery',callback_query_id=q['id'])
@@ -17,6 +29,11 @@ class Callbacks:
         if self.monitoring_callback(uid,data): return
         if self.payment_callback(uid,data): return
         parts=data.split(':'); action=parts[0]
+        if action=='referralrule' and uid in self.owners:
+            if len(parts)==2 and parts[1] in ('simple','cascade'):
+                self.db.set('referral_rule',parts[1])
+                self.db.run('INSERT INTO audit(id,actor,action,created) VALUES (?,?,?,?)',(uuid.uuid4().hex,uid,data,time.time()))
+            return self.show_referral_settings(uid)
         if action=='buy': return self.buy(uid,parts[1])
         if action=='proof':
             g=self.group(parts[1])
@@ -28,10 +45,12 @@ class Callbacks:
             return self.show(uid,'g:'+g['id'])
         if action=='setting' and uid in self.owners:
             key=parts[1]
-            if key not in ('referral_rule','unban_goal','words'): return
+            if key=='referral_rule': return self.show_referral_settings(uid)
+            if key not in ('unban_goal','words','fastpass_description'): return
             self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
             prompt={'referral_rule':'Écris simple ou cascade.','unban_goal':'Envoie le nombre requis (1 à 10000).',
-                    'words':'Envoie les termes interdits, un par ligne. Un tiret pour vider.'}[key]
+                    'words':'Envoie les termes interdits, un par ligne. Un tiret pour vider.',
+                    'fastpass_description':'Envoie le texte commun à tous les accès coupe-file (maximum 1800 caractères).'}[key]
             return self.screen(uid,prompt,[[button('⬅️ Annuler','admin')]])
         if action in ('roles','role','slots','slot','toggle','edit','ads','adnew','adoff','publish','portalphoto'):
             g=self.group(parts[1])
@@ -114,6 +133,7 @@ class Callbacks:
             if uid not in self.owners: return
             key=parts[1]
             if key=='referral_rule' and value not in ('simple','cascade'): raise ValueError('Valeur : simple ou cascade.')
+            if key=='fastpass_description' and (not value or len(value)>1800): raise ValueError('Texte requis, maximum 1800 caractères.')
             if key=='unban_goal' and not (value.isdigit() and 1<=int(value)<=10000): raise ValueError('Nombre entre 1 et 10000.')
             self.db.set(key,'' if value=='-' else value)
             page='admin'

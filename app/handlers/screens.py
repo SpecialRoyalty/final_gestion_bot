@@ -11,6 +11,19 @@ class Screens:
         user = self.user(uid)
         if user['permanent']:
             return self.screen(uid, 'Accès indisponible.', [])
+        if page=='home':
+            if uid in self.owners:
+                page='admin'
+            else:
+                managed=[]
+                for candidate in self.db.all('SELECT * FROM groups WHERE enabled=1 ORDER BY title'):
+                    try:
+                        if self.admin(uid,candidate): managed.append(candidate)
+                    except Exception as error: self.record_failure('admin_lookup:'+candidate['id'],error)
+                if managed:
+                    rows=[[button('⚙️ '+g['title'],'a:'+g['id'])] for g in managed]
+                    rows += [[button('🔗 Inviter mes amis','invite'),button('👤 Vue membre','member')],[button('🔄 Actualiser','home')]]
+                    return self.screen(uid,'<b>🛠 Administration de tes groupes</b>',rows)
         if page == 'invite':
             portal = self.db.one("SELECT * FROM groups WHERE role='portal' AND enabled=1")
             if not portal: return self.screen(uid, 'Le portail sera bientôt disponible.', [[button('⬅️ Accueil','home')]])
@@ -68,8 +81,11 @@ class Screens:
                      [button('⚙️ Configuration','configuration')],
                      [button('🔗 Règle invitations','setting:referral_rule'),button('🔓 Débannissement','setting:unban_goal')],
                      [button('💳 Paiements','payments'),button('⚙️ Moyens de paiement','payconfig')],
-                     [button('🚫 Mots interdits','setting:words')],[button('⬅️ Accueil','home')]]
-            return self.screen(uid,'<b>🛠 Administration du réseau</b>\nAjoute le bot administrateur à un supergroupe pour le connecter.',rows)
+                     [button('📝 Texte coupe-file','setting:fastpass_description')],
+                     [button('🚫 Mots interdits','setting:words')],
+                     [button('🔗 Inviter mes amis','invite'),button('👤 Vue membre','member')],
+                     [button('🔄 Actualiser','admin')]]
+            return self.screen(uid,'<b>🛠 Administration du réseau</b>\nAjoute le bot administrateur à un supergroupe pour le connecter.\n\n<i>Actualisé le '+self.time_label(time.time())+'</i>',rows)
         if page.startswith('a:'):
             g=self.group(page[2:])
             if not g or not self.admin(uid,g): return self.show(uid)
@@ -106,6 +122,6 @@ class Screens:
                 except Exception as error:
                     self.record_failure('admin_lookup:'+g['id'],error)
         text+='\n\n<i>Accueil actualisé le '+self.time_label(time.time())+'</i>'
-        rows += [[button('🔄 Actualiser','home')]]
+        rows += [[button('🔄 Actualiser','member')]]
         return self.screen(uid,text,rows)
 
