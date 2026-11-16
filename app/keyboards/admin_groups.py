@@ -5,8 +5,10 @@ from app.utils.group_roles import ROLE_LABELS, WEEKDAYS, allows
 def group_controls(group,owner):
     gid=group['id']; role=group['role']; rows=[]
     if owner: rows.append([button('Rôle : '+ROLE_LABELS.get(role,role),'roles:'+gid)])
+    if allows(role,'description') and role!='portal': rows.append([button('✏️ Nom affiché','edit:'+gid+':title')])
     if allows(role,'description'):
         rows.append([button('📝 Texte du portail' if role=='portal' else '📝 Description','edit:'+gid+':description')])
+    if role=='portal': rows.append([button('🖼 Image du portail','portalphoto:'+gid)])
     if role=='portal' and group['enabled']:
         rows.append([button('📢 Publier / actualiser le portail','publish:'+gid)])
     if allows(role,'goal'):
