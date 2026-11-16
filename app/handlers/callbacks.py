@@ -1,4 +1,5 @@
 import html
+import json
 from app.services.telegram import APIError
 import time
 import uuid
@@ -7,6 +8,11 @@ from app.utils.group_roles import allows, ROLE_LABELS
 from app.keyboards.inline import button, keyboard
 
 class Callbacks:
+    def callback_ads(self,uid,g):
+        ads=self.db.all('SELECT * FROM ads WHERE gid=? ORDER BY id',(g['id'],))
+        rows=[[button(('🟢 ' if a['enabled'] else '⏸ ')+a['text'][:25]+' · '+str(a['interval_hours'])+' h','adoff:'+g['id']+':'+a['id'])] for a in ads]
+        return self.screen(uid,'<b>📣 Publicités</b>\nLes diffusions ont lieu pendant l’ouverture du groupe. Sélectionne une publicité pour la mettre en pause ou la réactiver.',rows+[[button('➕ Ajouter une publicité','adnew:'+g['id'])],[button('⬅️ Retour','a:'+g['id'])]])
+
     def show_referral_settings(self,uid):
         if uid not in self.owners: return
         current=self.db.setting('referral_rule','simple')
@@ -27,6 +33,12 @@ class Callbacks:
         if data.startswith('launchack:'): return self.acknowledge_launch(uid,data.split(':',1)[1])
         if self.launch_gate(uid): return
         self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
+        if data.startswith('daypick:'):
+            parts=data.split(':'); g=self.group(parts[1])
+            if g and self.admin(uid,g) and allows(g['role'],'weekday') and len(parts)==3 and parts[2] in tuple(map(str,range(7))):
+                self.db.run('UPDATE groups SET weekday=? WHERE id=?',(int(parts[2]),g['id']))
+                return self.show(uid,'a:'+g['id'])
+            return
         if self.workflow_callback(uid,data): return
         if self.welcome_callback(uid,data): return
         if self.readiness_callback(uid,data): return
@@ -58,10 +70,10 @@ class Callbacks:
                     'fastpass_description':'Envoie le texte commun à tous les accès coupe-file (maximum 1800 caractères).'}[key]
             rows=[[button('↩️ Texte par défaut','resetfastpass')]] if key=='fastpass_description' else []
             return self.screen(uid,prompt,rows+[[button('⬅️ Annuler','admin')]])
-        if action in ('roles','role','slots','slot','toggle','edit','ads','adnew','adoff','publish','portalphoto'):
+        if action in ('roles','role','slots','slot','toggle','edit','ads','adnew','adoff','adfrequency','adconfirm','publish','portalphoto'):
             g=self.group(parts[1])
             if not g or not self.admin(uid,g): return
-            feature={'slots':'slot','slot':'slot','ads':'ads','adnew':'ads','adoff':'ads'}.get(action)
+            feature={'slots':'slot','slot':'slot','ads':'ads','adnew':'ads','adoff':'ads','adfrequency':'ads','adconfirm':'ads'}.get(action)
             if action in ('edit','toggle') and len(parts)>2 and parts[2] not in ('chat','enabled'):
                 feature=parts[2]
             if feature and not allows(g['role'],feature): return self.show(uid,'a:'+g['id'])
@@ -118,16 +130,42 @@ class Callbacks:
                 if field not in ('title','description','goal','price','threshold','rules','weekday','chat'): return
                 if field=='chat' and uid not in self.owners: return
                 self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
-                return self.screen(uid,'Envoie la nouvelle valeur pour <b>'+field+'</b>.\nPour remplacer un groupe : son identifiant Telegram négatif, après avoir ajouté le bot administrateur.',[[button('⬅️ Annuler','a:'+g['id'])]])
+                prompts={'title':'Quel nom veux-tu afficher pour ce groupe ?',
+                    'description':'Envoie la présentation que les membres verront avant de rejoindre ce groupe.',
+                    'goal':'Combien d’invitations faut-il pour débloquer ce groupe ? (1 à 10000)',
+                    'threshold':'Combien de membres présents faut-il au minimum pour ouvrir le groupe ? (1 à 10000)',
+                    'rules':'Envoie les règles à afficher dans ce groupe.',
+                    'chat':'Ajoute le bot administrateur au nouveau groupe, puis envoie son identifiant Telegram négatif.',
+                    'price':'Envoie le nouveau tarif.', 'weekday':'Choisis le jour d’ouverture.'}
+                if field=='weekday':
+                    from app.utils.group_roles import WEEKDAYS
+                    return self.screen(uid,prompts[field],[[button(day,'daypick:'+g['id']+':'+str(i))] for i,day in enumerate(WEEKDAYS)])
+                return self.screen(uid,prompts[field],[[button('⬅️ Annuler','a:'+g['id'])]])
             if action=='ads':
-                ads=self.db.all('SELECT * FROM ads WHERE gid=?',(g['id'],))
-                rows=[[button(('🟢 ' if a['enabled'] else '⚪ ')+a['text'][:30],'adoff:'+g['id']+':'+a['id'])] for a in ads]
-                return self.screen(uid,'<b>📣 Publicités</b>\nClique une publicité pour activer/désactiver.',rows+[[button('➕ Ajouter','adnew:'+g['id'])],[button('⬅️ Retour','a:'+g['id'])]])
+                self.db.set(f'ad_draft:{uid}:{g["id"]}','')
+                return self.callback_ads(uid,g)
             if action=='adnew':
-                self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
-                return self.screen(uid,'Envoie un texte ou une photo légendée.\nPremière ligne : 2, 4, 6 ou 12 (intervalle en heures).\nLignes suivantes : ta publicité.',[[button('⬅️ Annuler','a:'+g['id'])]])
+                self.db.set(f'ad_draft:{uid}:{g["id"]}','')
+                return self.screen(uid,'<b>📣 Nouvelle publicité · 1/3</b>\nÀ quelle fréquence veux-tu la diffuser pendant l’ouverture du groupe ?',
+                    [[button('Toutes les '+str(h)+' heures',f'adfrequency:{g["id"]}:{h}') for h in (2,4)],
+                     [button('Toutes les '+str(h)+' heures',f'adfrequency:{g["id"]}:{h}') for h in (6,12)],
+                     [button('⬅️ Annuler','ads:'+g['id'])]])
+            if action=='adfrequency':
+                if len(parts)!=3 or parts[2] not in ('2','4','6','12'): return
+                self.db.set(f'ad_draft:{uid}:{g["id"]}',json.dumps({'id':uuid.uuid4().hex,'hours':int(parts[2])}))
+                self.db.run('UPDATE users SET pending=? WHERE id=?',('adnew:'+g['id'],uid))
+                return self.screen(uid,'<b>📣 Nouvelle publicité · 2/3</b>\nEnvoie simplement ton texte, ou une photo avec sa légende.\nMaximum 800 caractères. Tu verras un aperçu avant de confirmer.',[[button('⬅️ Changer la fréquence','adnew:'+g['id']),button('Annuler','ads:'+g['id'])]])
+            if action=='adconfirm':
+                raw=self.db.setting(f'ad_draft:{uid}:{g["id"]}')
+                draft=json.loads(raw) if raw else {}
+                if len(parts)!=3 or draft.get('id')!=parts[2] or 'body' not in draft: return self.callback_ads(uid,g)
+                self.db.run('INSERT INTO ads(id,gid,text,photo,interval_hours) VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
+                    (draft['id'],g['id'],draft['body'],draft['photo'],draft['hours']))
+                self.db.set(f'ad_draft:{uid}:{g["id"]}','')
+                return self.callback_ads(uid,g)
             if action=='adoff':
                 self.db.run('UPDATE ads SET enabled=1-enabled WHERE id=? AND gid=?',(parts[2],g['id']))
+                return self.callback_ads(uid,g)
             self.db.run('INSERT INTO audit(id,actor,action,created) VALUES (?,?,?,?)',(uuid.uuid4().hex,uid,data,time.time()))
             return self.show(uid,'a:'+g['id'])
         self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
@@ -159,12 +197,17 @@ class Callbacks:
                 self.db.set('portal_photo:'+g['id'],m['photo'][-1]['file_id'])
             elif action=='adnew':
                 if not allows(g['role'],'ads'): return self.show(uid,'a:'+g['id'])
-                hours,sep,body=value.partition('\n')
-                if hours not in ('2','4','6','12') or not body: raise ValueError('Première ligne : 2, 4, 6 ou 12. Puis le texte.')
-                photo=m['photo'][-1]['file_id'] if m.get('photo') else None
-                if len(body)>1000: raise ValueError('Publicité limitée à 1000 caractères.')
-                self.db.run('INSERT INTO ads(id,gid,text,photo,interval_hours) VALUES (?,?,?,?,?)',
-                            (uuid.uuid4().hex,g['id'],body,photo,int(hours)))
+                raw=self.db.setting(f'ad_draft:{uid}:{g["id"]}')
+                draft=json.loads(raw) if raw else {}
+                if 'hours' not in draft: raise ValueError('Choisis d’abord la fréquence avec le bouton Ajouter une publicité.')
+                if not value or len(value.encode('utf-16-le'))//2>800: raise ValueError('Ajoute un texte ou une légende de 1 à 800 caractères.')
+                if m.get('document') or m.get('video'): raise ValueError('Envoie un texte ou une photo Telegram avec sa légende.')
+                draft.update(body=value,photo=m['photo'][-1]['file_id'] if m.get('photo') else None)
+                self.db.set(f'ad_draft:{uid}:{g["id"]}',json.dumps(draft))
+                self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
+                return self.refresh_panel(uid,lambda:self.screen(uid,'<b>📣 Aperçu · 3/3</b>\nToutes les '+str(draft['hours'])+' heures pendant l’ouverture.\n\n'+html.escape(value),
+                    [[button('✅ Enregistrer la publicité','adconfirm:'+g['id']+':'+draft['id'])],
+                     [button('✏️ Modifier','adfrequency:'+g['id']+':'+str(draft['hours'])),button('Annuler','ads:'+g['id'])]],photo=draft['photo']))
             else:
                 field=parts[2]
                 if field!='chat' and not allows(g['role'],field): return self.show(uid,'a:'+g['id'])

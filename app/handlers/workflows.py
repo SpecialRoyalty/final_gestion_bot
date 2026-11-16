@@ -110,7 +110,7 @@ class MemberWorkflows:
             self.invitation_screen(uid,parts[1])
         elif action=='bug':
             groups=self.db.all("SELECT * FROM groups WHERE enabled=1 AND role IN ('chat','always') ORDER BY title")
-            self.screen(uid,self.tr(uid,'Décris un problème réel. Après validation admin, tu recevras +5 crédits pour le groupe choisi. Les doublons ne sont pas récompensés.'),[[button(g['title'],'bugtarget:'+g['id'])] for g in groups]+[[button(self.tr(uid,'Mes signalements'),'mybugs')],[button(self.tr(uid,'⬅️ Accueil'),'home')]])
+            self.screen(uid,self.tr(uid,'Décris un problème réel. Après validation admin, tu recevras +5 invitations pour le groupe choisi. Les doublons ne sont pas récompensés.'),[[button(g['title'],'bugtarget:'+g['id'])] for g in groups]+[[button(self.tr(uid,'Mes signalements'),'mybugs')],[button(self.tr(uid,'⬅️ Accueil'),'home')]])
         elif action=='bugtarget' and len(parts)==2:
             g=self.group(parts[1])
             if not g or not g['enabled'] or g['role'] not in ('chat','always'): return True
@@ -184,4 +184,4 @@ class MemberWorkflows:
             status='approved' if approve else 'rejected'
             self.db.run('UPDATE bug_tickets SET status=?,reviewed_by=?,reviewed_at=? WHERE id=?',(status,uid,time.time(),oid))
             self.db.run('INSERT INTO audit(id,actor,action,created) VALUES (?,?,?,?)',(uuid.uuid4().hex,uid,'bug:'+oid+':'+status,time.time()))
-            self.enqueue('sendMessage',dict(chat_id=r['uid'],text=self.tr(r['uid'],'✅ Bug validé : +5 crédits ajoutés à ton objectif.' if approve else 'Ton signalement a été examiné et refusé.'),reply_markup=keyboard([button(self.tr(r['uid'],'Mes signalements'),'mybugs')])))
+            self.enqueue('sendMessage',dict(chat_id=r['uid'],text=self.tr(r['uid'],'✅ Bug validé : +5 invitations ajoutés à ton objectif.' if approve else 'Ton signalement a été examiné et refusé.'),reply_markup=keyboard([button(self.tr(r['uid'],'Mes signalements'),'mybugs')])))

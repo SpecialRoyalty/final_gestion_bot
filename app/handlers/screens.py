@@ -65,7 +65,7 @@ class Screens:
                 if not used: rows += [[button(self.tr(uid,'👀 Commencer ma visite'), 'proof:'+g['id'])]]
             else:
                 if g['role'] != 'vip':
-                    text += self.tr(uid,'<b>🎯 TON ACCÈS</b>\n<code>')+progress(n,g['goal']).split('\n')[0]+'</code>\n<b>'+str(n)+' / '+str(g['goal'])+self.tr(uid,' crédits d’invitation</b>\nEncore ')+str(max(0,g['goal']-n))+self.tr(uid,' pour débloquer ce groupe.\n\n')
+                    text += self.tr(uid,'<b>🎯 TON ACCÈS</b>\n<code>')+progress(n,g['goal']).split('\n')[0]+'</code>\n<b>'+str(n)+' / '+str(g['goal'])+self.tr(uid,' invitations validées</b>\nEncore ')+str(max(0,g['goal']-n))+self.tr(uid,' pour débloquer ce groupe.\n\n')
                     rows += [[button(self.tr(uid,'🔗 Inviter mes amis'),'invite:'+g['id'])]]
                 pending = self.db.one("SELECT id FROM manual_orders WHERE uid=? AND gid=? AND status IN ('awaiting_proof','review')",(uid,g['id']))
                 if self.payment_options(g['id']) or pending:
