@@ -214,6 +214,10 @@ EXPECTED = {'access': {'columns': [{'name': 'uid', 'type': 'BIGINT'},
                        {'name': 'ban_base', 'type': 'INTEGER'}]}}
 
 
+# Additive migration: previously applied migration strings are unchanged.
+MIGRATIONS += (("003_metrics.sql", "CREATE TABLE IF NOT EXISTS metric_events (id TEXT PRIMARY KEY, kind TEXT NOT NULL, uid BIGINT, gid TEXT, created DOUBLE PRECISION NOT NULL); CREATE INDEX IF NOT EXISTS metric_time_kind ON metric_events(created,kind); CREATE INDEX IF NOT EXISTS metric_group_time ON metric_events(gid,created);"),)
+EXPECTED['metric_events']={'columns':[{'name':name,'type':kind} for name,kind in [('id','TEXT'),('kind','TEXT'),('uid','BIGINT'),('gid','TEXT'),('created','DOUBLE PRECISION')]]}
+
 class SchemaMismatch(RuntimeError):
     pass
 
