@@ -39,13 +39,11 @@ def forbidden(text, terms):
     return any(re.search(r'(?<!\w)' + re.escape(normalized(t)) + r'(?!\w)', text)
                for t in terms if t.strip())
 
-def countdown(seconds):
-    minutes=max(0,math.ceil(seconds/60))
-    if minutes>=1440:
-        days,rest=divmod(minutes,1440)
-        return f'{days} j {rest//60} h'
-    if minutes>=60:
-        hours,rest=divmod(minutes,60)
-        return f'{hours} h {rest:02d} min'
-    if minutes: return f'{minutes} min'
-    return 'moins d’une minute'
+def countdown(seconds, closing=False, weekly=False):
+    """Stable announcement buckets: never a minute-by-minute distant countdown."""
+    minutes=max(1,math.ceil(seconds/60))
+    if weekly and minutes>1440: return f'environ {math.ceil(minutes/1440)} j'
+    if minutes>60: return f'environ {math.ceil(minutes/60)} h'
+    milestones=(60,30,15,5,4,3,2,1) if closing else ((60,30,15,10,5,4,3,2,1) if weekly else (60,30,10,5,4,3,2,1))
+    bucket=next(value for value in reversed(milestones) if value>=minutes)
+    return 'moins d’une heure' if bucket==60 else f'moins de {bucket} min'
