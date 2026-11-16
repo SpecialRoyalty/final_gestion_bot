@@ -7,7 +7,7 @@ def main():
     # Import the real entry point, to catch missing modules at image build time.
     from app import main as entrypoint
     if not callable(entrypoint.main): raise RuntimeError('Point d’entrée invalide')
-    if len(MIGRATIONS)!=3 or not EXPECTED: raise RuntimeError('Schéma embarqué incomplet')
+    if len(MIGRATIONS)!=4 or not EXPECTED: raise RuntimeError('Schéma embarqué incomplet')
     db=DB('sqlite:///:memory:')
     try:
         migrate(db)

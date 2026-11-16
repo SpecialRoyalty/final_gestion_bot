@@ -13,6 +13,8 @@ from app.services.payments import ManualPayments
 
 from app.handlers.welcome import Welcome
 
-class App(Welcome, Readiness, Monitoring, Context, Screens, Callbacks, LegacyPayments, Router,
+from app.handlers.workflows import MemberWorkflows
+
+class App(MemberWorkflows, Welcome, Readiness, Monitoring, Context, Screens, Callbacks, LegacyPayments, Router,
           Moderation, Scheduler, ManualPayments, PaymentScreens):
     """Composition root: handlers, services and adapters share one application context."""
