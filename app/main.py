@@ -3,57 +3,46 @@ import os
 import time
 import threading
 from .db import DB, SchemaMismatch
-from .services.telegram import Telegram, APIError
+from .services.telegram import Telegram
 from .application import App
-
+from .services.runtime import Acknowledgements, persist_updates, start_workers
 
 def main():
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
-    token=os.environ['BOT_TOKEN']
+    token=os.environ['BOT_TOKEN'];url=os.environ['DATABASE_URL']
     owners={int(x.strip()) for x in os.environ['OWNER_IDS'].split(',') if x.strip()}
-    if not owners: raise RuntimeError('OWNER_IDS requis')
-    try:
-        db=DB(os.environ['DATABASE_URL'])
+    if not owners:raise RuntimeError('OWNER_IDS requis')
+    try:db=DB(url)
     except SchemaMismatch as error:
-        logging.error('%s',error)
-        raise SystemExit(2) from None
-    api=Telegram(token)
-    app=App(db,api,owners,os.getenv('TIMEZONE','Europe/Paris'),os.getenv('SUPPORT_CONTACT','Administrateur'))
-    api.call('deleteWebhook',drop_pending_updates=False)
-    app.install_command_menu()
+        logging.error('%s',error);raise SystemExit(2) from None
+    api=Telegram(token,timeout=5,retries=1)
+    tz=os.getenv('TIMEZONE','Europe/Paris');support=os.getenv('SUPPORT_CONTACT','Administrateur')
+    app=App(db,api,owners,tz,support)
+    api.call('deleteWebhook',drop_pending_updates=False);app.install_command_menu()
     allowed=['message','edited_message','callback_query','chat_member','my_chat_member','chat_join_request','pre_checkout_query']
+    stop=threading.Event();acks=Acknowledgements(Telegram(token,timeout=2,retries=1))
+    workers=start_workers(url,token,owners,tz,support,app.me,stop)
     from .services.media import run_worker
-    stop=threading.Event()
-    worker=threading.Thread(target=run_worker,args=(os.environ['DATABASE_URL'],token,stop),daemon=True)
-    worker.start()
-    logging.info('Bot démarré. Réception des événements Telegram active ; /start et navigation disponibles.')
-    while True:
-        try:
-            offset=int(db.setting('offset','0'))
-            updates=api.call('getUpdates',offset=offset,timeout=10,allowed_updates=allowed)
-            db.set('poll:ok',time.time())
-            for update in updates:
-                try:
-                    app.update(update)
-                except ValueError as e:
-                    msg=update.get('message',{})
-                    if msg.get('chat',{}).get('type')=='private':
-                        app.screen(msg['from']['id'],str(e),[[{'text':app.tr(msg['from']['id'],'⬅️ Accueil'),'callback_data':'home'}]])
-                    else: app.alert(str(e))
-                except APIError as e:
-                    # Keep update for retry on temporary Telegram errors.
-                    if e.code==429 or e.code>=500: raise
-                    app.alert('Mise à jour à vérifier : '+str(e))
-                db.set('offset',update['update_id']+1)
-            app.tick()
-        except KeyboardInterrupt:
-            stop.set()
-            worker.join(timeout=5)
-            break
-        except Exception as e:
-            # Do not log raw request URLs: they contain BOT_TOKEN.
-            try: app.record_failure('main',e)
-            except Exception: logging.error('Cycle interrompu (%s)',type(e).__name__)
-            time.sleep(5)
+    media=threading.Thread(target=run_worker,args=(url,token,stop),daemon=True);media.start();workers.append(media)
+    logging.info('Bot démarré : boutons, modération, arrivées/départs et tâches automatiques séparés.')
+    cleanup=0
+    try:
+        while not stop.is_set():
+            try:
+                if any(not w.is_alive() for w in workers):raise RuntimeError('Worker arrêté : redémarrage du processus requis.')
+                updates=api.call('getUpdates',offset=int(db.setting('offset','0')),timeout=10,allowed_updates=allowed)
+                for update in updates:acks.submit(update)
+                persist_updates(db,updates)
+                db.set('poll:ok',time.time());db.set('callback_ack:errors',acks.errors)
+                if time.time()-cleanup>3600:
+                    db.run("DELETE FROM update_inbox WHERE state='done' AND created<?",(time.time()-7*86400,));cleanup=time.time()
+            except RuntimeError:raise
+            except Exception as error:
+                app.record_failure('poll',error);stop.wait(1)
+    except KeyboardInterrupt:pass
+    finally:
+        stop.set();acks.close()
+        for worker in workers:worker.join(timeout=7)
+        db.conn.close()
 
-if __name__=='__main__': main()
+if __name__=='__main__':main()
