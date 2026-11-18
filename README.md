@@ -533,12 +533,39 @@ Les erreurs réseau sont présentées comme des connexions interrompues, jamais 
 Les tests couvrent l’attribution par groupe, la validation cascade, les retours sans double crédit, la régénération et son échec, les décisions de bugs idempotentes, les autorisations, les annonces bloquantes, leur persistance, les suppressions ciblées et les coupures réseau. Les requêtes de schéma et de transition sont aussi vérifiées sur PostgreSQL 16.2 en mode local sans serveur réseau. Le bot Telegram en production n’est pas accessible dans cet environnement ; les appels Telegram des tests sont simulés.
 
 
-## Version 11 — interfaces simplifiées et annonces restaurées
+## Version 12 — traitement rapide, anti-liens et portail animé
 
-- Les compteurs membres affichent **invitations validées**, et les récompenses de bugs parlent de **+5 invitations**. La distinction comptable des invitations réelles et des bonus reste intacte.
-- Langues : 🇫🇷 Français, 🇬🇧 English, 🇮🇹 Italiano, 🇪🇸 Español.
-- L’annonce de statut du groupe fait l’objet d’une vérification d’existence environ toutes les 60 secondes, au prochain cycle du planificateur. Si Telegram confirme sa suppression, le bot la republie. Une panne réseau ne déclenche pas une seconde publication. Une annonce intacte n’est pas renvoyée et le rythme des paliers reste inchangé. Ce rétablissement n’est pas instantané : Telegram ne fournit pas ici de notification de suppression.
-- **Publicités → Ajouter une publicité** : choix de fréquence par boutons (2, 4, 6 ou 12 heures), envoi du texte ou de la photo légendée, aperçu puis confirmation. Aucun préfixe horaire à saisir. La publicité est enregistrée uniquement après confirmation ; annuler invalide le brouillon. Le contenu est limité à 800 caractères pour rester compatible avec l’aperçu illustré. Les annonces existantes restent conservées.
-- La liste des publicités indique l’intervalle et permet la pause/réactivation.
-- Le jour d’ouverture se choisit par son nom avec des boutons. Les autres réglages posent des questions précises plutôt que d’afficher des noms techniques de champs.
-- Tests supplémentaires : message supprimé/restauré, panne réseau sans doublon, publicité illustrée avec validation unique, annulation et droits d’administration, sélection du jour et drapeaux.
+### Déploiement
+
+Redéployer avec les mêmes `BOT_TOKEN`, `OWNER_IDS` et `DATABASE_URL`, en conservant **un seul replica Railway**. La migration embarquée `005_fast_dispatch.sql` ajoute la boîte de réception persistante et des index, sans supprimer les tables ou accès existants. Aucune modification des variables n’est nécessaire. Chaque worker possède sa propre connexion à la base ; prévoir environ onze connexions PostgreSQL pour le processus complet (polling, quatre workers privés, deux de modération, arrivées/départs, tâches planifiées, file d’actions et médias). Le verrou de polling reste détenu par le processus principal.
+
+### Réactivité et reprise
+
+- Le polling stocke les mises à jour avant d’avancer son offset, dans une seule transaction. Les identifiants empêchent leur réinsertion en double. Les événements terminés sont conservés sept jours ; les échecs restent visibles pour diagnostic.
+- Les boutons de chaque utilisateur conservent leur ordre, dans quatre files privées distinctes. Deux files de modération maintiennent l’ordre par groupe. Les messages d’arrivée/départ ont leur propre file et sont supprimés directement, sans attendre le planificateur.
+- Les accusés `answerCallbackQuery` partent dans un pool séparé, avec un délai réseau de deux secondes. Un accusé expiré ou interrompu ne bloque plus l’action du bouton et ne génère plus une notification répétitive aux propriétaires. Les erreurs sont comptabilisées dans État du réseau.
+- Les actions interactives utilisent un délai réseau de quatre secondes par appel et une seule tentative dans la couche transport. Les opérations automatiques utilisent six secondes. Les reprises d’événements sont bornées et les jobs échoués restent en file. Une panne réseau n’est pas supprimable par le code et une réponse perdue après un envoi peut laisser une livraison ambiguë.
+- Les listes d’administrateurs sont mises en cache trente secondes. Les mutations de configuration recontrôlent le statut individuel en direct. Les événements de changement de statut invalident le cache. Les vérifications de droits périodiques sont réparties, une par cycle, plutôt que toutes au même moment.
+- **État du réseau** indique les événements en attente/échec et les derniers délais par file. Ces chiffres permettent de mesurer les performances réelles sur Railway. Le test de concurrence simule un planificateur bloqué et vérifie que navigation et suppression des arrivées progressent malgré cela ; il ne mesure pas le réseau Telegram réel.
+
+### Anti-liens
+
+L’anti-liens est actif pour les membres dans tous les groupes connectés et activés, portail compris. Il examine textes, légendes, entités URL, liens cachés et boutons contenant un lien. Les liens ordinaires `http(s)`, `tg://`, `t.me`, `www` et domaines sont reconnus ; les simples mentions et adresses email ne sont pas assimilées à des liens. Certaines écritures volontairement déguisées peuvent échapper à une détection textuelle ; le bot n’analyse pas les QR codes ni le texte à l’intérieur des images.
+
+Le message est supprimé immédiatement. Le membre est marqué banni et exclu du réseau, portail compris, avec propagation par la file prioritaire. Ce statut empêche aussi l’accès aux groupes futurs. Le mécanisme existant de demande de débannissement reste disponible dans le bot ; ce bannissement n’est pas un bannissement permanent sans recours. Les publications du bot et des administrateurs sont exemptées. Un message publié au nom d’un canal externe entraîne une exclusion du canal émetteur, sans inventer l’identité d’une personne derrière celui-ci.
+
+### Publicités du portail
+
+La fiche du groupe portail affiche maintenant **Publicités**. Le parcours guidé est conservé : fréquence 2/4/6/12 heures → texte ou photo légendée → aperçu → confirmation. Plusieurs campagnes peuvent être enregistrées et tourner en continu dans le portail, même si aucun chat n’est ouvert. Il n’y a qu’une publicité de campagne visible : l’ancienne est supprimée et la suppression confirmée avant l’envoi de la suivante. Une erreur de suppression empêche la nouvelle diffusion afin d’éviter un doublon. La mise en pause d’une campagne retire aussi son message au prochain cycle.
+
+### Annonces temporaires d’accès
+
+En plus de l’accueil et de la campagne publicitaire, le portail affiche une annonce temporaire par groupe classique, gratuit ou 24 h/24 ouvert : **🟢 Groupe X est ouvert**. Elle est retirée quand le groupe ferme ou n’est plus disponible.
+
+Pendant le créneau prévu, si le locker bloque l’ouverture, l’annonce reste présente avec **🟠 Groupe X attend N membres pour ouvrir**, et invite à rejoindre/partager. Elle ne prétend pas que les messages sont autorisés tant que le groupe reste verrouillé.
+
+Pour les groupes classiques et 24 h/24, le bouton ouvre la fiche privée du bot : un membre ayant déjà rempli l’objectif ou payé voit son lien personnel, les autres voient l’objectif et le partage vers le portail. Un bouton public identique pour tous ne contient jamais le lien privé d’un membre. Pour le gratuit, le bouton mène directement à l’invitation du groupe ; une demande d’admission est automatiquement vérifiée pour empêcher un membre banni de contourner le contrôle.
+
+Le cycle de publication reste d’environ vingt secondes, selon les réponses de Telegram. L’annonce de statut supprimée manuellement est vérifiée environ chaque minute et restaurée ; la cadence des décomptes reste celle des paliers. Les drapeaux, le vocabulaire « invitations », les jours sélectionnables et les consignes simplifiées restent présents.
+
+Référence technique : [Telegram Bot API](https://core.telegram.org/bots/api), notamment `answerCallbackQuery`, `MessageEntity`, `getChatAdministrators` et `createChatInviteLink`.
