@@ -23,7 +23,10 @@ class DB:
                 raise
 
     def run(self, sql, args=()):
-        return self.conn.execute(sql if self.sqlite else sql.replace('?', '%s'), args)
+        if self.sqlite:return self.conn.execute(sql,args)
+        if not args:return self.conn.execute(sql)
+        # Escape literal percent signs before introducing psycopg placeholders.
+        return self.conn.execute(sql.replace('%','%%').replace('?', '%s'),args)
 
     def one(self, sql, args=()):
         row = self.run(sql, args).fetchone()
