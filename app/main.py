@@ -25,7 +25,7 @@ def main():
     from .services.media import run_worker
     media=threading.Thread(target=run_worker,args=(url,token,stop),daemon=True);media.start();workers.append(media)
     logging.info('Bot démarré : boutons, modération, arrivées/départs et tâches automatiques séparés.')
-    cleanup=0
+    cleanup=0;poll_failures=0
     try:
         while not stop.is_set():
             try:
@@ -34,11 +34,13 @@ def main():
                 for update in updates:acks.submit(update)
                 persist_updates(db,updates)
                 db.set('poll:ok',time.time());db.set('callback_ack:errors',acks.errors)
+                app.record_success('poll');poll_failures=0
                 if time.time()-cleanup>3600:
                     db.run("DELETE FROM update_inbox WHERE state='done' AND created<?",(time.time()-7*86400,));cleanup=time.time()
             except RuntimeError:raise
             except Exception as error:
-                app.record_failure('poll',error);stop.wait(1)
+                poll_failures+=1
+                app.record_failure('poll',error);stop.wait(min(30,2**min(poll_failures-1,5)))
     except KeyboardInterrupt:pass
     finally:
         stop.set();acks.close()
