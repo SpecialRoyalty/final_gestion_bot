@@ -2,7 +2,7 @@ import json
 import time
 import uuid
 from app.utils.core import active_access
-from app.services.telegram import APIError
+from app.services.telegram import APIError, blocked_recipient
 from app.keyboards.inline import keyboard
 
 class Context:
@@ -89,6 +89,13 @@ class Context:
         return translate(self.language(uid),text)
 
     def screen(self, uid, text, rows, photo=None):
+        if self.db.setting('dm_blocked:'+str(uid)):return
+        try:return self._screen(uid,text,rows,photo)
+        except APIError as error:
+            if not blocked_recipient(error):raise
+            self.db.set('dm_blocked:'+str(uid),time.time())
+
+    def _screen(self, uid, text, rows, photo=None):
         user = self.user(uid)
         data = dict(chat_id=uid, text=text, parse_mode='HTML', reply_markup=keyboard(*rows),
                     link_preview_options={'is_disabled': True})
@@ -118,7 +125,10 @@ class Context:
             try:
                 self.api.call('deleteMessage',chat_id=uid,message_id=old_menu)
             except Exception as error:
+                if blocked_recipient(error):
+                    self.db.set('dm_blocked:'+str(uid),time.time());return
                 # Keep a working new panel if Telegram cannot delete an old message.
+                self.enqueue('deleteMessage',dict(chat_id=uid,message_id=old_menu),due=time.time()+5)
                 self.enqueue('editMessageReplyMarkup',dict(chat_id=uid,message_id=old_menu,reply_markup={'inline_keyboard':[]}))
                 self.record_failure('panel_cleanup',error)
 

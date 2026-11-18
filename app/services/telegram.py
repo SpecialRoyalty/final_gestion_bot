@@ -15,6 +15,12 @@ class NetworkError(APIError):
         self.method=method
         super().__init__({'error_code':0,'description':'Connexion Telegram interrompue ('+method+'). Résultat non confirmé.'})
 
+def blocked_recipient(error):
+    return isinstance(error,APIError) and error.code==403 and any(t in str(error).lower() for t in ('bot was blocked by the user','user is deactivated'))
+
+def transient_error(error):
+    return isinstance(error,NetworkError) or (isinstance(error,APIError) and (error.code==429 or error.code>=500))
+
 class Telegram:
     SAFE_PREFIXES=('get','edit','set','delete','revoke','unban','ban','restrict','approve','decline')
     def __init__(self, token, timeout=5, retries=1):

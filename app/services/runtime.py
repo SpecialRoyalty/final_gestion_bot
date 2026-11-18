@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from app.application import App
 from app.db import DB
-from app.services.telegram import Telegram, APIError, NetworkError
+from app.services.telegram import Telegram, APIError, NetworkError, blocked_recipient
 
 PRIVATE_LANES=4
 MODERATION_LANES=2
@@ -54,6 +54,8 @@ def process_one(app,lane):
     row=db.one("SELECT * FROM update_inbox WHERE lane=? AND state='ready' ORDER BY id LIMIT 1",(lane,))
     if not row or row['due']>time.time():return False
     update=json.loads(row['payload']);started=time.monotonic();state='done'
+    message=update.get('message',{})
+    recipient=update.get('callback_query',{}).get('from',{}).get('id') or (message.get('from',{}).get('id') if message.get('chat',{}).get('type')=='private' else None)
     try:
         app.update(update)
     except ValueError as error:
@@ -65,6 +67,9 @@ def process_one(app,lane):
                 state='failed';app.record_failure('update:'+lane,delivery_error)
         else:app.record_failure('update:'+lane,error)
     except Exception as error:
+        if blocked_recipient(error) and recipient:
+            db.set('dm_blocked:'+str(recipient),time.time())
+            db.run("UPDATE update_inbox SET state='done' WHERE id=?",(row['id'],));return True
         # Retry a bounded number of times, retaining per-lane event ordering.
         attempts=row['attempts']+1
         if isinstance(error,(NetworkError,APIError)) and (getattr(error,'code',0)==429 or getattr(error,'code',0)>=500 or isinstance(error,NetworkError)) and attempts<3:

@@ -9,6 +9,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from app.keyboards.inline import button
 from app.services.payments import money
+from app.services.telegram import transient_error
 
 
 def safe_error(error):
@@ -23,12 +24,24 @@ class Monitoring:
         self.db.run('INSERT INTO metric_events(id,kind,uid,gid,created) VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
                     (key or uuid.uuid4().hex,kind,uid,gid,time.time()))
 
+    def record_success(self,key):
+        self.db.set(key+':error','')
+        self.db.set(key+':failure_count',0)
+
     def record_failure(self,key,error):
-        message=safe_error(error)
+        message=safe_error(error);now=time.time()
+        last=float(self.db.setting(key+':error_at','0'))
+        count=int(self.db.setting(key+':failure_count','0'))+1 if now-last<300 else 1
         self.db.set(key+':error',message)
-        self.db.set(key+':error_at',time.time())
-        logging.warning('%s — %s',key,message)
-        self.alert(key+' : '+message)
+        self.db.set(key+':error_at',now)
+        self.db.set(key+':failure_count',count)
+        # Keep every current failure visible in diagnostics; notify only persistent outages.
+        if transient_error(error):
+            logging.info('%s — incident temporaire (%s)',key,type(error).__name__)
+            if count>=3:self.alert('Incident persistant '+key+' : '+message)
+        else:
+            logging.warning('%s — %s',key,message)
+            self.alert(key+' : '+message)
 
     def time_label(self,stamp):
         return datetime.fromtimestamp(float(stamp),ZoneInfo(self.tz)).strftime('%d/%m %H:%M:%S') if stamp else 'jamais'
@@ -75,6 +88,7 @@ class Monitoring:
                     checks.append('⚠️ Description manquante')
                 if g['role']=='portal' and not self.db.one("SELECT 1 FROM notices WHERE gid=? AND kind='portal'",(gid,)):
                     checks.append('⚠️ Aucun message de portail enregistré')
+                if g['role'] in ('chat','free','always','vip','proof') and not g['rules'].strip():checks.append('⚠️ Règles du groupe manquantes')
                 if g['role']=='vip' and not self.payment_options(gid): checks.append('⚠️ Aucun moyen de paiement configuré')
                 if not any(check.startswith('⚠️') for check in checks): self.db.set('health:'+gid,time.time())
 
@@ -100,6 +114,13 @@ class Monitoring:
         for lane in ('private:0','private:1','private:2','private:3','service'):
             duration=self.db.setting('latency:'+lane+':ms')
             if duration:lines.append(lane+' : dernier traitement '+duration+' ms · délai total '+self.db.setting('latency:'+lane+':queue_ms','0')+' ms')
+        incidents=self.db.all('SELECT key,value FROM settings WHERE key LIKE ? AND value!=? ORDER BY key',('%:error',''))
+        recent=[]
+        for incident in incidents:
+            stamp=float(self.db.setting(incident['key']+'_at','0'))
+            if now-stamp<86400:recent.append((stamp,incident))
+        for stamp,incident in sorted(recent,key=lambda item:item[0],reverse=True)[:5]:
+            lines.append('⚠️ '+html.escape(incident['key'][:-6])+' · '+self.time_label(stamp)+' : '+html.escape(incident['value']))
         config=self.configuration_summary()
         lines.insert(1,f'Configuration : {config["percent"]} % ({config["done"]}/{config["total"]} critères)')
         lines.insert(2,'Ce pourcentage ne mesure pas le fonctionnement technique.')

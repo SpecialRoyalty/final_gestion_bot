@@ -3,7 +3,7 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from app.utils.core import progress, member_present, window, countdown
-from app.services.telegram import APIError
+from app.services.telegram import APIError, blocked_recipient
 from app.keyboards.inline import button, keyboard
 
 class Scheduler:
@@ -30,7 +30,7 @@ class Scheduler:
                 else:raise
             self.db.set(prefix+':verified',time.time())
             if old:return
-        if old and kind=='status':
+        if old and (kind=='status' or kind.startswith('opening:')):
             try:
                 self.api.call('deleteMessage',chat_id=g['chat'],message_id=old['mid'])
             except APIError as error:
@@ -76,9 +76,10 @@ class Scheduler:
             from app.services.monitoring import safe_error
             message='Publication impossible : '+safe_error(error)
             self.db.set('portal_error:'+g['id'],message)
-            self.alert(g['title']+' : '+message)
+            self.record_failure('portal:'+g['id'],error)
             return False
         self.db.set('portal_error:'+g['id'],'')
+        self.record_success('portal:'+g['id'])
         return True
 
     def remove_notice(self,g,kind):
@@ -93,6 +94,9 @@ class Scheduler:
             if time.monotonic()>deadline: break
             try:
                 payload=json.loads(job['payload'])
+                recipient=payload.get('chat_id',0)
+                if isinstance(recipient,int) and recipient>0 and self.db.setting('dm_blocked:'+str(recipient)):
+                    self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],));continue
                 guard_gid=payload.pop('_unless_entitled',None)
                 guard_ban=payload.pop('_if_banned',False)
                 guard_unban=payload.pop('_unless_banned',False)
@@ -100,15 +104,21 @@ class Scheduler:
                 if guard_ban: skip=not self.user(payload['user_id'])['banned']
                 if guard_unban: skip=bool(self.user(payload['user_id'])['banned'])
                 if not skip: self.api.call(job['method'],**payload)
+                self.record_success('job:'+job['method'])
                 self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],))
             except Exception as e:
+                if blocked_recipient(e) and isinstance(payload.get('chat_id'),int) and payload['chat_id']>0:
+                    self.db.set('dm_blocked:'+str(payload['chat_id']),time.time())
+                    self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],));continue
+                if job['method'].startswith('editMessage') and any(t in str(e) for t in ('message to edit not found','message is not modified')):
+                    self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],));continue
                 # A missing message is already deleted. Other failures remain visible/retriable.
                 if job['method']=='deleteMessage' and 'message to delete not found' in str(e):
                     self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],)); continue
                 attempts=job['attempts']+1
                 delay=max(getattr(e,'retry',0),min(3600,2**min(attempts,12)))
                 self.db.run('UPDATE jobs SET attempts=?,due=? WHERE id=?',(attempts,time.time()+delay,job['id']))
-                if attempts==3 and job['method']!='sendMessage': self.record_failure('job:'+job['method'],e)
+                self.record_failure('job:'+job['method'],e)
 
     def close(self,g):
         # Lock first, enqueue all cleanup transactionally, then record closure.
@@ -195,6 +205,9 @@ class Scheduler:
     def task_schedule(self,now):
         groups=self.db.all('SELECT * FROM groups WHERE enabled=1')
         windows=self.scheduled(groups,now)
+        for disabled in self.db.all('SELECT * FROM groups WHERE enabled=0'):
+            try:self.remove_notice_now(disabled,'rules')
+            except Exception as error:self.record_failure('rules:'+disabled['id'],error)
         # Close all outdated sessions BEFORE opening another, even across midnight.
         failed_closures=set()
         for g in groups:
@@ -213,6 +226,7 @@ class Scheduler:
                 self.db.set('group:'+g['id']+':attempt',now)
                 spans=windows.get(g['id'],[])
                 active=next(((a,b) for a,b in spans if a<=now<b),None)
+                self.session_rules(g,spans,now)
                 should_open=g['role'] in ('always','vip','proof') or bool(active)
                 count=None
                 if should_open and not g['opened'] and g['locker']:
@@ -245,16 +259,19 @@ class Scheduler:
                         message='🔴 Groupe fermé.'+(' Ouverture dans '+countdown(min(future)-now,weekly=g['role']=='free')+'.' if future else ' Prochaine ouverture annoncée ici.')
                         if future: message+='\nPrévue le '+datetime.fromtimestamp(min(future),ZoneInfo(self.tz)).strftime('%d/%m à %H:%M')+' ('+self.tz+').'
                         self.notice(g,'status',message,[invite])
-                    if g['opened'] and g['rules']:
-                        bucket=str(int(now//1800))
-                        if self.db.setting('rules:'+g['id'])!=bucket:
-                            self.remove_notice(g,'rules')
-                            self.notice(g,'rules',g['rules'],[])
-                            self.db.set('rules:'+g['id'],bucket)
                 self.db.set('group:'+g['id']+':ok',time.time())
-                self.db.set('group:'+g['id']+':error','')
+                self.record_success('group:'+g['id'])
             except Exception as error:
                 self.record_failure('group:'+g['id'],error)
+
+    def session_rules(self,g,spans,now):
+        if g['role']=='portal':return
+        scheduled=g['role'] in ('chat','free')
+        in_session=any(a-300<=now<b for a,b in spans) if scheduled else bool(g['enabled'])
+        if in_session and g['rules'].strip():
+            self.notice(g,'rules',g['rules'],[])
+        else:
+            self.remove_notice_now(g,'rules')
 
     def task_rights(self,now):
         # Spread periodic network diagnostics across cycles; do not delay every opening.
@@ -282,6 +299,7 @@ class Scheduler:
                         self.notice(g,'live','🔥 '+live['title']+' est ouvert !',
                             [[button('👀 Découvrir',url=self.deep('g_'+live['id']))],[button('🔗 J’invite',url=self.deep('invite'))]])
                     else: self.remove_notice(g,'live')
+                self.record_success('announce:'+g['id'])
             except Exception as error:
                 self.record_failure('announce:'+g['id'],error)
 

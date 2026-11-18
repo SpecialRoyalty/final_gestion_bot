@@ -19,6 +19,7 @@ class Readiness:
             add('Objectif d’invitations',g['goal']>0,'edit:'+gid+':goal')
         if role in ('chat','free'):
             add('Horaires',g['slot'] in SLOTS,'slots:'+gid)
+        if role in ('chat','free','always','vip','proof'):add('Règles du groupe',g['rules'].strip(),'edit:'+gid+':rules')
         if role=='free': add('Jour d’ouverture',0<=g['weekday']<=6,'edit:'+gid+':weekday')
         if g['locker'] and role not in ('portal','proof'):
             add('Seuil du locker',g['threshold']>0,'edit:'+gid+':threshold')
