@@ -23,6 +23,7 @@ class Router:
         if not m: return
         if m['chat']['type']!='private': return self.group_message(m)
         uid=m['from']['id']; user=self.user(uid)
+        self.db.set('dm_blocked:'+str(uid),'')
         if m.get('successful_payment'): return self.paid(uid,m['successful_payment'])
         text=m.get('text','')
         if text.startswith('/paysupport') or text.startswith('/support'):

@@ -23,6 +23,7 @@ class Callbacks:
         uid=q['from']['id']; data=q.get('data','home')
         self.answer_callback(q)
         if q.get('message',{}).get('chat',{}).get('id')!=uid: return
+        self.db.set('dm_blocked:'+str(uid),'')
         if self.user(uid)['permanent']: return self.show(uid)
         if data.startswith('launchack:'): return self.acknowledge_launch(uid,data.split(':',1)[1])
         if self.launch_gate(uid): return
