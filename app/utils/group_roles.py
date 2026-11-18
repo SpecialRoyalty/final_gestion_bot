@@ -7,7 +7,7 @@ ROLE_FIELDS={
     'chat':frozenset({'title','description','goal','prices','locker','threshold','slot','rules','anti','ads'}),
     'always':frozenset({'title','description','goal','prices','locker','threshold','rules','anti','ads'}),
     'vip':frozenset({'title','description','prices','monthly','locker','threshold','rules','anti','ads'}),
-    'proof':frozenset({'title','description'}),
+    'proof':frozenset({'title','description','rules'}),
     'free':frozenset({'title','description','locker','threshold','slot','weekday','rules','anti','ads'}),
 }
 WEEKDAYS=('Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche')
