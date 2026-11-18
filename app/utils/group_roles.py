@@ -3,7 +3,7 @@ ROLE_LABELS={'unset':'À configurer','portal':'Portail','chat':'Chat classique',
              'vip':'VIP','proof':'Preuve','free':'Gratuit'}
 ROLE_FIELDS={
     'unset':frozenset(),
-    'portal':frozenset({'description'}),
+    'portal':frozenset({'description','ads'}),
     'chat':frozenset({'title','description','goal','prices','locker','threshold','slot','rules','anti','ads'}),
     'always':frozenset({'title','description','goal','prices','locker','threshold','rules','anti','ads'}),
     'vip':frozenset({'title','description','prices','monthly','locker','threshold','rules','anti','ads'}),
