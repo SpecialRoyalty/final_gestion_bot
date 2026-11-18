@@ -34,7 +34,7 @@ class Router:
             self.db.set('start:received',time.time())
             arg=text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1))>1 else ''
             try:
-                result=self.refresh_panel(uid,lambda:self.show(uid,'g:'+arg[2:] if arg.startswith('g_') else ('invite' if arg=='invite' else 'home')))
+                result=self.refresh_panel(uid,lambda:self.show(uid,'g:'+arg[2:] if arg.startswith('g_') else ('invite:'+arg[7:] if arg.startswith('invite_') else ('invite' if arg=='invite' else 'home'))))
                 self.db.set('start:rendered',time.time())
                 self.db.set('start:error','')
                 return result

@@ -37,7 +37,8 @@ class Screens:
                 n = max(0, self.count(uid)-user['ban_base'])
                 if n >= target:
                     self.db.run('UPDATE users SET banned=0 WHERE id=?',(uid,))
-                    for g in self.db.all("SELECT * FROM groups WHERE enabled=1 AND role!='portal'"):
+                    self.db.set('link_ban:'+str(uid),'')
+                    for g in self.db.all("SELECT * FROM groups WHERE enabled=1"):
                         self.enqueue('unbanChatMember',dict(chat_id=g['chat'],user_id=uid,only_if_banned=True,_unless_banned=True))
                     return self.show(uid)
                 return self.screen(uid, self.tr(uid,'<b>Demande de débannissement</b>\n\n')+progress(n,target),

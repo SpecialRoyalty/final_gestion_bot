@@ -38,7 +38,7 @@ class PaymentScreens:
             self.db.set('pay:'+parts[1],''); self.payment_callback(uid,'payconfig')
         elif action=='pricedisable' and len(parts)==3:
             g=self.group(parts[1])
-            if g and self.admin(uid,g) and allows(g['role'],'prices') and parts[2] in METHODS:
+            if g and self.admin(uid,g,fresh=True) and allows(g['role'],'prices') and parts[2] in METHODS:
                 self.db.run('DELETE FROM payment_prices WHERE gid=? AND method=?',(g['id'],parts[2]))
                 self.payment_callback(uid,'prices:'+g['id'])
         elif action=='method': self.payment_choose(uid,parts[1],parts[2])
@@ -63,7 +63,7 @@ class PaymentScreens:
             self.screen(uid,'Envoie les coordonnées de réception, ou désactive ce moyen avec le bouton ci-dessous.',[[btn('⏸ Désactiver ce moyen','paydisable:'+parts[1])],[btn('⬅️ Annuler','payconfig')]])
         elif action=='prices':
             g=self.group(parts[1])
-            if not g or not self.admin(uid,g) or not allows(g['role'],'prices'): return True
+            if not g or not self.admin(uid,g,fresh=True) or not allows(g['role'],'prices'): return True
             rows=[]
             for method,(name,currency,fee) in METHODS.items():
                 p=self.db.one('SELECT cents FROM payment_prices WHERE gid=? AND method=?',(g['id'],method))
@@ -71,7 +71,7 @@ class PaymentScreens:
             self.screen(uid,'<b>Prix de base</b>\nLes 15 % sont ajoutés automatiquement pour PayPal et Revolut. USDT possède son propre montant.',rows+[[btn(self.tr(uid,'⬅️ Retour'),'a:'+g['id'])]])
         elif action=='price':
             g=self.group(parts[1])
-            if not g or not self.admin(uid,g) or not allows(g['role'],'prices') or parts[2] not in METHODS: return True
+            if not g or not self.admin(uid,g,fresh=True) or not allows(g['role'],'prices') or parts[2] not in METHODS: return True
             self.db.run('UPDATE users SET pending=? WHERE id=?',(data,uid))
             self.screen(uid,'Envoie le prix de base, par exemple 10,50, ou retire ce tarif avec le bouton ci-dessous.',[[btn('🗑 Retirer ce tarif','pricedisable:'+g['id']+':'+parts[2])],[btn('⬅️ Annuler','prices:'+g['id'])]])
         else: return False
@@ -88,7 +88,7 @@ class PaymentScreens:
             self.payment_callback(uid,'payconfig'); return True
         if action=='price':
             g=self.group(parts[1])
-            if not g or not self.admin(uid,g) or not allows(g['role'],'prices'): return True
+            if not g or not self.admin(uid,g,fresh=True) or not allows(g['role'],'prices'): return True
             method=parts[2]
             amount=cents(text)
             self.db.run('INSERT INTO payment_prices(gid,method,cents) VALUES (?,?,?) ON CONFLICT(gid,method) DO UPDATE SET cents=excluded.cents',(g['id'],method,amount))
