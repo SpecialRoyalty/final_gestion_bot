@@ -569,3 +569,20 @@ Pour les groupes classiques et 24 h/24, le bouton ouvre la fiche privée du bot 
 Le cycle de publication reste d’environ vingt secondes, selon les réponses de Telegram. L’annonce de statut supprimée manuellement est vérifiée environ chaque minute et restaurée ; la cadence des décomptes reste celle des paliers. Les drapeaux, le vocabulaire « invitations », les jours sélectionnables et les consignes simplifiées restent présents.
 
 Référence technique : [Telegram Bot API](https://core.telegram.org/bots/api), notamment `answerCallbackQuery`, `MessageEntity`, `getChatAdministrators` et `createChatInviteLink`.
+
+
+## Version 13 — annonces vertes, règles anticipées et erreurs classées
+
+Cette section remplace les indications précédentes concernant les annonces orange du locker et la répétition des règles.
+
+- Dans le portail, pendant le créneau prévu, l’annonce est **🟢 Groupe X est ouvert ! Il fermera dans …**, même si le locker empêche encore l’ouverture réelle. Le locker continue de contrôler les permissions du groupe. Le décompte avance par tranches de trente minutes (2 h, 1 h 30, 1 h, 30 min). À chaque changement, la précédente annonce est supprimée avant publication de la nouvelle. À la fin du créneau, elle est retirée. Les groupes 24/24 affichent leur disponibilité continue, sans inventer d’heure de fermeture.
+- Les règles des groupes classiques et gratuits sont affichées au premier cycle situé entre cinq minutes avant le début du créneau et sa fin. Elles restent présentes jusqu’à la fin, sans empilement. Si le bot redémarre pendant cette période, il reprend le message existant ou le recrée s’il manque. Si le locker n’a jamais laissé ouvrir le groupe, les règles sont tout de même retirées à la fin prévue. Un groupe sans créneau conserve ses règles en continu tant qu’il est activé. La désactivation retire les règles au prochain cycle.
+- **Configuration / sanity check** comporte désormais le critère **Règles du groupe**, avec accès au bouton de configuration. Le diagnostic technique signale aussi leur absence. Aucun texte de règles n’est inventé.
+- Le motif `opening:%` est envoyé comme paramètre SQL. L’adaptateur PostgreSQL échappe également les pourcentages littéraux des requêtes paramétrées et n’envoie pas de tableau de paramètres vide aux requêtes simples. Les migrations déjà appliquées ne sont pas modifiées.
+- Une coupure réseau isolée est enregistrée dans les diagnostics sans notification immédiate répétitive. Trois échecs rapprochés du même traitement déclenchent une alerte d’incident persistant, avec la déduplication habituelle. Une réussite réinitialise le compteur du polling, des publications du portail et des actions concernées. Le polling applique une reprise progressive de 1 à 30 secondes.
+- Une erreur nouvelle non temporaire reste signalée immédiatement. Le panneau État du réseau affiche les cinq incidents récents encore enregistrés ; les logs gardent les détails techniques. Il ne s’agit pas de masquer les problèmes.
+- Si Telegram répond que le destinataire a bloqué le bot ou désactivé son compte, les envois privés vers lui sont arrêtés, les tâches concernées sont retirées de la file et aucune alerte de panne réseau n’est envoyée. Un nouveau message privé de cet utilisateur réactive la possibilité de lui répondre. Cela ne modifie pas ses achats ni ses droits d’accès.
+- Si le nettoyage d’un ancien panneau échoue, une véritable suppression est désormais remise en file, en plus du retrait de ses boutons. Une édition d’un message déjà supprimé est considérée terminée.
+- L’anti-liens et le bannissement réseau de la version 12 restent actifs. Les tests des URL, légendes, liens cachés, administrateurs exemptés et groupes futurs font partie des vérifications de cette version.
+
+Validation : tests applicatifs avec Telegram simulé, tests de la syntaxe des paramètres avec psycopg, et vérification SQL locale PostgreSQL 16.2. Les coupures de Telegram, les indisponibilités du réseau et les pertes de réponse après envoi restent possibles ; aucune promesse de zéro erreur en production n’est faite. Une livraison dont la réponse a été perdue peut rester ambiguë.
