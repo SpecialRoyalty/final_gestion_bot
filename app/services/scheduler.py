@@ -21,18 +21,15 @@ class Scheduler:
         prefix='notice:'+g['id']+':'+kind
         verified=float(self.db.setting(prefix+':verified','0'))
         if old and old['body']==body and not force:
-            if time.time()-verified<60: return
-            try:
-                # A same-keyboard edit probes existence without changing text or posting again.
-                self.api.call('editMessageReplyMarkup',chat_id=g['chat'],message_id=old['mid'],reply_markup=keyboard(*rows))
+            if time.time()-verified<60:return
+            try:self.api.call('editMessageReplyMarkup',chat_id=g['chat'],message_id=old['mid'],reply_markup=keyboard(*rows))
             except APIError as error:
-                if 'message is not modified' in str(error): pass
+                if 'message is not modified' in str(error):pass
                 elif 'message to edit not found' in str(error):
-                    self.db.run('DELETE FROM notices WHERE gid=? AND kind=?',(g['id'],kind))
-                    old=None
-                else: raise
+                    self.db.run('DELETE FROM notices WHERE gid=? AND kind=?',(g['id'],kind));old=None
+                else:raise
             self.db.set(prefix+':verified',time.time())
-            if old: return
+            if old:return
         if old and kind=='status':
             try:
                 self.api.call('deleteMessage',chat_id=g['chat'],message_id=old['mid'])
@@ -70,9 +67,9 @@ class Scheduler:
         if g['role']!='portal' or not g['enabled']: return False
         live=self.db.one("SELECT * FROM groups WHERE enabled=1 AND role='chat' AND opened=1")
         text=g['description'] or '✨ Bienvenue ! Découvre les groupes et débloque tes accès.'
-        if live: text+='\n\n🔥 '+live['title']+' est ouvert !'
+
         rows=[[button('👤 Découvrir les groupes',url=self.deep())]]
-        if live: rows.insert(0,[button('🔥 '+live['title'],url=self.deep('g_'+live['id']))])
+
         try:
             self.notice(g,'portal',text,rows,force=force,photo=self.db.setting('portal_photo:'+g['id']) or None)
         except Exception as error:
@@ -92,7 +89,7 @@ class Scheduler:
 
     def jobs(self):
         deadline=time.monotonic()+10
-        for job in self.db.all('SELECT * FROM jobs WHERE due<=? ORDER BY due LIMIT 5',(time.time(),)):
+        for job in self.db.all("SELECT * FROM jobs WHERE due<=? ORDER BY CASE WHEN method IN ('banChatMember','deleteMessage','deleteMessages','banChatSenderChat') THEN 0 ELSE 1 END,due LIMIT 30",(time.time(),)):
             if time.monotonic()>deadline: break
             try:
                 payload=json.loads(job['payload'])
@@ -222,6 +219,7 @@ class Scheduler:
                     # Telegram authoritative count, minus bot. No claim that members are active.
                     count=max(0,self.api.call('getChatMemberCount',chat_id=g['chat'])-1)
                     should_open=count>=g['threshold']
+                self.db.set('waiting:'+g['id'],(active[1] if active else now+60) if count is not None and count<g['threshold'] else 0)
                 if g['role']!='portal':
                     if should_open and not g['opened'] and g['role']=='chat':
                         other=self.db.one("SELECT id FROM groups WHERE role='chat' AND opened=1 AND id!=?",(g['id'],))
@@ -253,13 +251,22 @@ class Scheduler:
                             self.remove_notice(g,'rules')
                             self.notice(g,'rules',g['rules'],[])
                             self.db.set('rules:'+g['id'],bucket)
-                if now-float(self.db.setting('health:'+g['id'],'0'))>=7200:
-                    self.check_rights(g)
-                    self.db.set('health:'+g['id'],now)
                 self.db.set('group:'+g['id']+':ok',time.time())
                 self.db.set('group:'+g['id']+':error','')
             except Exception as error:
                 self.record_failure('group:'+g['id'],error)
+
+    def task_rights(self,now):
+        # Spread periodic network diagnostics across cycles; do not delay every opening.
+        candidates=[]
+        for g in self.db.all('SELECT * FROM groups WHERE enabled=1'):
+            checked=float(self.db.setting('health:'+g['id'],'0'))
+            attempted=float(self.db.setting('health_attempt:'+g['id'],'0'))
+            if now-checked>=7200 and now-attempted>=120:candidates.append((attempted,g['id'],g))
+        if not candidates:return
+        g=min(candidates,key=lambda row:(row[0],row[1]))[2]
+        self.db.set('health_attempt:'+g['id'],now)
+        self.check_rights(g);self.db.set('health:'+g['id'],now)
 
     def task_announcements(self,now):
         groups=self.db.all('SELECT * FROM groups WHERE enabled=1')
@@ -269,6 +276,7 @@ class Scheduler:
             try:
                 if g['role']=='portal':
                     self.publish_portal(g)
+                    self.portal_promotions(g,now)
                 elif g['role'] in ('chat','always','free'):
                     if live and g['id']!=live['id']:
                         self.notice(g,'live','🔥 '+live['title']+' est ouvert !',
@@ -291,18 +299,20 @@ class Scheduler:
                 self.db.run('UPDATE members SET warned=1 WHERE uid=? AND gid=?',(m['uid'],g['id']))
 
     def task_ads(self,now):
-        advertised=set()
-        for ad in self.db.all('SELECT a.* FROM ads a JOIN groups g ON a.gid=g.id WHERE a.enabled=1 AND g.enabled=1 AND g.opened=1 AND a.next_at<=? ORDER BY a.next_at,a.id',(now,)):
-            if ad['gid'] in advertised: continue
-            advertised.add(ad['gid'])
-            g=self.group(ad['gid']); self.remove_notice(g,'ad')
-            if ad['photo']:
-                sent=self.api.call('sendPhoto',chat_id=g['chat'],photo=ad['photo'],caption=ad['text'])
-            else: sent=self.api.call('sendMessage',chat_id=g['chat'],text=ad['text'])
-            self.db.run("INSERT INTO notices(gid,kind,mid,body) VALUES (?,'ad',?,?) ON CONFLICT(gid,kind) DO UPDATE SET mid=excluded.mid,body=excluded.body",(g['id'],sent['message_id'],ad['text']))
-            # Rotate campaigns within the group, one visible ad at a time.
-            self.db.run('UPDATE ads SET next_at=? WHERE gid=?',(now+ad['interval_hours']*3600,g['id']))
-            self.db.run('UPDATE ads SET next_at=? WHERE id=?',(now+(ad['interval_hours']*3600)+1,ad['id']))
+        # A portal can advertise all day without being a chat session.
+        for g in self.db.all("SELECT * FROM groups WHERE enabled=1 AND (opened=1 OR role='portal')"):
+            try:
+                active=self.db.setting('active_ad:'+g['id'])
+                if active and not self.db.one('SELECT id FROM ads WHERE id=? AND enabled=1',(active,)):
+                    self.remove_notice_now(g,'ad');self.db.set('active_ad:'+g['id'],'')
+                ad=self.db.one('SELECT * FROM ads WHERE gid=? AND enabled=1 AND next_at<=? ORDER BY next_at,id LIMIT 1',(g['id'],now))
+                if not ad:continue
+                self.remove_notice_now(g,'ad')
+                self.notice(g,'ad',ad['text'],[],photo=ad['photo'])
+                self.db.set('active_ad:'+g['id'],ad['id'])
+                self.db.run('UPDATE ads SET next_at=? WHERE gid=?',(now+ad['interval_hours']*3600,g['id']))
+                self.db.run('UPDATE ads SET next_at=? WHERE id=?',(now+ad['interval_hours']*3600+1,ad['id']))
+            except Exception as error:self.record_failure('ads:'+g['id'],error)
 
     def tick(self):
         now=time.time()
@@ -314,7 +324,7 @@ class Scheduler:
             self.alert(warning); self.db.set('media_warning','')
         failed=[]
         # Opening/countdowns do not depend on successful referral checks or queue delivery.
-        for name in ('expiry','schedule','announcements','referrals','activity','ads','diagnostics'):
+        for name in ('expiry','schedule','announcements','referrals','activity','ads','rights','diagnostics'):
             self.db.set('task:'+name+':attempt',time.time())
             try:
                 getattr(self,'task_'+name)(now)
@@ -324,7 +334,7 @@ class Scheduler:
                 failed.append(name)
                 self.record_failure('task:'+name,error)
         try:
-            self.jobs()
+            if not getattr(self,'external_jobs',False): self.jobs()
         except Exception as error:
             failed.append('jobs')
             self.record_failure('task:jobs',error)

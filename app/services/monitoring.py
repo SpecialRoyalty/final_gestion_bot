@@ -93,6 +93,13 @@ class Monitoring:
                'Réception Telegram : '+pulse('poll:ok'),
                'Dernier cycle terminé : '+pulse('scheduler:completed'),
                'Traitement médias : '+pulse('media:heartbeat')]
+        pending=self.db.one("SELECT COUNT(*) AS n FROM update_inbox WHERE state='ready'")['n']
+        failed_updates=self.db.one("SELECT COUNT(*) AS n FROM update_inbox WHERE state='failed'")['n']
+        lines.append(f'Événements en attente : {pending} · échecs à examiner : {failed_updates}')
+        lines.append('Accusés boutons en échec (sans bloquer l’action) : '+self.db.setting('callback_ack:errors','0'))
+        for lane in ('private:0','private:1','private:2','private:3','service'):
+            duration=self.db.setting('latency:'+lane+':ms')
+            if duration:lines.append(lane+' : dernier traitement '+duration+' ms · délai total '+self.db.setting('latency:'+lane+':queue_ms','0')+' ms')
         config=self.configuration_summary()
         lines.insert(1,f'Configuration : {config["percent"]} % ({config["done"]}/{config["total"]} critères)')
         lines.insert(2,'Ce pourcentage ne mesure pas le fonctionnement technique.')

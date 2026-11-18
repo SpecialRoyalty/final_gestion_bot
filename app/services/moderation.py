@@ -1,5 +1,6 @@
 import time
 from app.utils.core import member_present, forbidden
+from app.utils.links import contains_link
 
 class Moderation:
     def check_rights(self,g):
@@ -11,12 +12,13 @@ class Moderation:
         if member['status']!='administrator' or not all(member.get(r) for r in required):
             raise ValueError('Le bot doit être administrateur : supprimer, restreindre, inviter.')
 
-    def ban(self,uid,permanent=False):
+    def ban(self,uid,permanent=False,include_portal=False):
         self.user(uid)
+        if include_portal:self.db.set('link_ban:'+str(uid),'1')
         self.db.run('UPDATE users SET banned=1,permanent=CASE WHEN permanent=1 THEN 1 ELSE ? END,ban_base=? WHERE id=?',
                     (int(permanent),self.count(uid),uid))
         for g in self.db.all('SELECT * FROM groups WHERE enabled=1'):
-            if g['role']=='portal' and not permanent: continue
+            if g['role']=='portal' and not permanent and not include_portal: continue
             self.enqueue('banChatMember',dict(chat_id=g['chat'],user_id=uid,revoke_messages=True,_if_banned=True))
 
     def join_request(self,q):
@@ -24,6 +26,8 @@ class Moderation:
         if not g: return
         link=self.db.one('SELECT * FROM links WHERE url=?',(q.get('invite_link',{}).get('invite_link',''),))
         allowed=bool(g['enabled'] and link and link['uid']==uid and link['expires']>time.time() and self.entitled(uid,g))
+        if g['role']=='free' and link and link['gid']==g['id'] and link['purpose']=='public_free' and link['expires']>time.time():
+            allowed=bool(g['enabled'] and self.entitled(uid,g))
         if g['role']=='proof' and not allowed and link and link['uid']==uid and link['expires']>time.time() and g['enabled'] and not self.user(uid)['banned']:
             used=self.db.one('SELECT 1 FROM proof_used WHERE uid=? AND gid=?',(uid,g['id']))
             allowed=not used
@@ -38,6 +42,8 @@ class Moderation:
         g=self.db.one('SELECT * FROM groups WHERE chat=?',(q['chat']['id'],))
         if not g or not g['enabled']: return
         u=q['new_chat_member']['user']; uid=u['id']
+        if q['new_chat_member']['status']!=q['old_chat_member']['status']:
+            self.db.set('admin_roster:'+str(g['chat']),'{}')
         if u.get('is_bot'): return
         present=member_present(q['new_chat_member']); old=member_present(q['old_chat_member'])
         if present==old: return
@@ -72,15 +78,16 @@ class Moderation:
         g=self.db.one('SELECT * FROM groups WHERE chat=?',(m['chat']['id'],))
         if not g or not g['enabled']: return
         uid=m.get('from',{}).get('id',0); mid=m['message_id']
+        if m.get('new_chat_members') or m.get('left_chat_member'):
+            self.immediate_delete(g['chat'],mid); return
         media=m.get('photo',[{}])[-1] if m.get('photo') else m.get('video',{})
         fid=media.get('file_unique_id')
         previous=self.db.one('SELECT * FROM messages WHERE gid=? AND mid=?',(g['id'],mid))
         self.db.run('INSERT INTO messages(gid,mid,uid,album,file_id,created) VALUES (?,?,?,?,?,?) ON CONFLICT(gid,mid) DO NOTHING',
                     (g['id'],mid,uid,m.get('media_group_id'),fid,m.get('date',time.time())))
-        if m.get('new_chat_members') or m.get('left_chat_member'):
-            self.enqueue('deleteMessage',dict(chat_id=g['chat'],message_id=mid)); return
         text=m.get('text',m.get('caption',''))
         is_admin=self.admin(uid,g) if uid else False
+        if is_admin and uid not in self.owners:is_admin=self.admin(uid,g,fresh=True)
         reply=m.get('reply_to_message')
         if text.split(' ')[0].split('@')[0]=='/pedo' and is_admin and reply:
             victim=reply.get('from',{}).get('id')
@@ -93,7 +100,23 @@ class Moderation:
                 if item['file_id']:
                     self.db.run('INSERT INTO fingerprints(file_id,blocked) VALUES (?,1) ON CONFLICT(file_id) DO UPDATE SET blocked=1',(item['file_id'],))
             self.enqueue('deleteMessage',dict(chat_id=g['chat'],message_id=mid)); return
-        if is_admin: return
+        if is_admin or m.get('from',{}).get('id')==self.me['id']: return
+        if m.get('sender_chat'):
+            # Anonymous administrators are identified by the destination chat itself.
+            if m['sender_chat']['id']==g['chat']: return
+            if contains_link(m) or self.db.setting('banned_sender:'+str(m['sender_chat']['id'])):
+                self.immediate_delete(g['chat'],mid)
+                for target in self.db.all('SELECT * FROM groups WHERE enabled=1'):
+                    self.enqueue('banChatSenderChat',dict(chat_id=target['chat'],sender_chat_id=m['sender_chat']['id']))
+                self.db.set('banned_sender:'+str(m['sender_chat']['id']),'1')
+                return
+        if uid and contains_link(m):
+            self.immediate_delete(g['chat'],mid)
+            self.ban(uid,include_portal=True)
+            # Enforce locally immediately; the priority jobs lane propagates the network ban.
+            try: self.api.call('banChatMember',chat_id=g['chat'],user_id=uid,revoke_messages=True)
+            except Exception: pass  # A durable network-ban job already exists.
+            return
         if self.user(uid)['permanent'] or (self.user(uid)['banned'] and g['role']!='portal'):
             self.enqueue('deleteMessage',dict(chat_id=g['chat'],message_id=mid)); return
         if g['role']=='portal': return

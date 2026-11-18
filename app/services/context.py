@@ -6,9 +6,9 @@ from app.services.telegram import APIError
 from app.keyboards.inline import keyboard
 
 class Context:
-    def __init__(self, db, api, owners, tz='Europe/Paris', support='Administrateur'):
+    def __init__(self, db, api, owners, tz='Europe/Paris', support='Administrateur', me=None):
         self.db, self.api, self.owners, self.tz, self.support = db, api, set(owners), tz, support
-        self.me = api.call('getMe')
+        self.me = me or api.call('getMe')
         self.last_tick = 0
         self._fresh_panels=set()
         self.initialize_member_workflows()
@@ -34,11 +34,33 @@ class Context:
     def deep(self, page='home'):
         return f'https://t.me/{self.me["username"]}?start={page}'
 
-    def admin(self, uid, group=None):
+    def admin(self, uid, group=None, fresh=False):
         if uid in self.owners: return True
         if not group or not group['enabled']: return False
-        member = self.api.call('getChatMember', chat_id=group['chat'], user_id=uid)
-        return member['status'] in ('administrator', 'creator')
+        if fresh:
+            member=self.api.call('getChatMember',chat_id=group['chat'],user_id=uid)
+            return member['status'] in ('administrator','creator')
+        key='admin_roster:'+str(group['chat'])
+        cached=json.loads(self.db.setting(key,'{}'))
+        if cached.get('until',0)<time.time():
+            members=self.api.call('getChatAdministrators',chat_id=group['chat'])
+            cached={'until':time.time()+30,'ids':[m['user']['id'] for m in members if m['status'] in ('administrator','creator')]}
+            self.db.set(key,json.dumps(cached))
+        return uid in cached.get('ids',[])
+
+    def answer_callback(self,q):
+        if q.get('_acknowledged'): return
+        try: self.api.call('answerCallbackQuery',callback_query_id=q['id'])
+        except APIError as error:
+            # The spinner acknowledgement must never cancel the requested action.
+            self.db.set('callback_ack:last_error',type(error).__name__)
+            self.db.set('callback_ack:error_at',time.time())
+
+    def immediate_delete(self,chat_id,message_id):
+        try: self.api.call('deleteMessage',chat_id=chat_id,message_id=message_id)
+        except APIError as error:
+            if 'message to delete not found' not in str(error):
+                self.enqueue('deleteMessage',dict(chat_id=chat_id,message_id=message_id))
 
     def alert(self, text):
         # Hourly deduplication, failed alerts are queued just like other operations.
@@ -114,7 +136,7 @@ class Context:
 
     def entitled(self, uid, g):
         u = self.user(uid)
-        if u['permanent'] or (u['banned'] and g['role'] != 'portal'): return False
+        if u['permanent'] or (u['banned'] and (g['role'] != 'portal' or self.db.setting('link_ban:'+str(uid)))): return False
         if g['role'] in ('portal', 'free'): return True
         return active_access(self.access(uid, g['id']), time.time())
 
