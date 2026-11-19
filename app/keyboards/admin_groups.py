@@ -22,6 +22,7 @@ def group_controls(group,owner):
         rows.append(row)
     if allows(role,'slot'): rows.append([button('🕐 Horaires : '+group['slot'],'slots:'+gid)])
     if allows(role,'weekday'): rows.append([button('📅 Ouverture : '+WEEKDAYS[group['weekday']],'edit:'+gid+':weekday')])
+    if role=='proof':rows.append([button('👀 Durée et condition de visite','trial:'+gid)])
     if allows(role,'rules'): rows.append([button('📜 Règles','edit:'+gid+':rules')])
     if allows(role,'anti'): rows.append([button('Anti-repost : '+('ON' if group['anti'] else 'OFF'),'toggle:'+gid+':anti')])
     if allows(role,'ads'): rows.append([button('📣 Publicités','ads:'+gid)])
