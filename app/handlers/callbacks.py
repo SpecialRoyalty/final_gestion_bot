@@ -201,6 +201,8 @@ class Callbacks:
                         if registered: self.db.run('DELETE FROM groups WHERE id=?',(registered['id'],))
                         self.db.run('UPDATE groups SET chat=?,opened=0 WHERE id=?',(value,g['id']))
                         self.db.run('DELETE FROM notices WHERE gid=?',(g['id'],))
+                        for link in self.db.all('SELECT url FROM links WHERE gid=? AND expires!=0',(g['id'],)):
+                            self.enqueue('revokeChatInviteLink',dict(chat_id=g['chat'],invite_link=link['url']))
                         self.db.run('DELETE FROM links WHERE gid=?',(g['id'],))
                         self.db.run('UPDATE members SET present=0 WHERE gid=?',(g['id'],))
                     for a in self.db.all('SELECT * FROM access WHERE gid=? AND revoked=0',(g['id'],)):

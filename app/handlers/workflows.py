@@ -6,6 +6,7 @@ import uuid
 from urllib.parse import urlencode
 from app.keyboards.inline import button, keyboard
 from app.services.payments import METHODS, money, total
+from app.services.invite_links import PERMANENT_LINK
 
 class MemberWorkflows:
     def initialize_member_workflows(self):
@@ -16,7 +17,7 @@ class MemberWorkflows:
             self.db.run('UPDATE access SET base=0')
             # Existing enabled groups are not presented as new on deployment.
             self.db.run("INSERT INTO group_launches(gid,created) SELECT id,0 FROM groups WHERE enabled=1 AND role!='portal' ON CONFLICT DO NOTHING")
-            for link in self.db.all("SELECT l.* FROM links l WHERE l.purpose='referral' AND l.expires>0 AND NOT EXISTS (SELECT 1 FROM target_links t WHERE t.url=l.url)"):
+            for link in self.db.all("SELECT l.* FROM links l WHERE l.purpose='referral' AND l.expires!=0 AND NOT EXISTS (SELECT 1 FROM target_links t WHERE t.url=l.url)"):
                 portal=self.group(link['gid'])
                 if portal:self.enqueue('revokeChatInviteLink',dict(chat_id=portal['chat'],invite_link=link['url']))
                 self.db.run('UPDATE links SET expires=0 WHERE url=?',(link['url'],))
@@ -65,10 +66,10 @@ class MemberWorkflows:
             [button(self.tr(uid,'⬅️ Retour'),'g:'+gid),button(self.tr(uid,'Changer d’objectif'),'invite')]])
 
     def target_link(self,uid,g,portal,regenerate=False):
-        old=self.db.all("SELECT l.* FROM links l JOIN target_links t ON t.url=l.url WHERE l.uid=? AND t.gid=? AND l.gid=? AND l.purpose='referral' AND l.expires>? ORDER BY l.expires DESC",(uid,g['id'],portal['id'],time.time()))
-        if old and not regenerate and old[0]['expires']>time.time()+60: return old[0]['url']
-        expires=int(time.time()+86400)
-        result=self.api.call('createChatInviteLink',chat_id=portal['chat'],name=f'ref:{uid}:{g["id"]}'[:32],expire_date=expires)
+        old=self.db.all("SELECT l.* FROM links l JOIN target_links t ON t.url=l.url WHERE l.uid=? AND t.gid=? AND l.gid=? AND l.purpose='referral' AND (l.expires=-1 OR l.expires>?) ORDER BY CASE WHEN l.expires=-1 THEN 0 ELSE 1 END,l.expires DESC",(uid,g['id'],portal['id'],time.time()))
+        if old and not regenerate:return self.make_link_permanent(old[0],portal)
+        expires=PERMANENT_LINK
+        result=self.api.call('createChatInviteLink',chat_id=portal['chat'],name=f'ref:{uid}:{g["id"]}'[:32])
         url=result['invite_link']
         try:
             if regenerate:
