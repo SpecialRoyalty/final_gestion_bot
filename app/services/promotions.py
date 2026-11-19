@@ -1,6 +1,7 @@
 """Portal campaigns and temporary opening announcements."""
 import time
 import math
+from app.services.invite_links import PERMANENT_LINK
 from app.keyboards.inline import button
 from app.services.telegram import APIError, DeferredRequest, deletion_result
 
@@ -17,10 +18,10 @@ class Promotions:
         self.db.run('DELETE FROM notices WHERE gid=? AND kind=?',(g['id'],kind))
 
     def free_portal_link(self,g):
-        row=self.db.one("SELECT url FROM links WHERE gid=? AND purpose='public_free' AND expires>?",(g['id'],time.time()+60))
-        if row:return row['url']
-        expires=int(time.time()+86400)
-        result=self.api.call('createChatInviteLink',chat_id=g['chat'],name='Portail · gratuit',creates_join_request=True,expire_date=expires)
+        row=self.db.one("SELECT * FROM links WHERE gid=? AND purpose='public_free' AND (expires=-1 OR expires>?) ORDER BY CASE WHEN expires=-1 THEN 0 ELSE 1 END,expires DESC LIMIT 1",(g['id'],time.time()+60))
+        if row:return self.make_link_permanent(row,g)
+        expires=PERMANENT_LINK
+        result=self.api.call('createChatInviteLink',chat_id=g['chat'],name='Portail · gratuit',creates_join_request=True)
         self.db.run("INSERT INTO links(url,gid,uid,purpose,expires) VALUES (?,?,0,'public_free',?)",(result['invite_link'],g['id'],expires))
         return result['invite_link']
 

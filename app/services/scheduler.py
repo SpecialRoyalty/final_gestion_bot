@@ -370,7 +370,7 @@ class Scheduler:
             self.alert(warning); self.db.set('media_warning','')
         failed=[]
         # Opening/countdowns do not depend on successful referral checks or queue delivery.
-        for name in ('expiry','schedule','announcements','referrals','activity','ads','rights','diagnostics','rosters'):
+        for name in ('expiry','schedule','announcements','referrals','activity','ads','rights','diagnostics','rosters','permalinks'):
             self.db.set('task:'+name+':attempt',time.time())
             try:
                 getattr(self,'task_'+name)(now)

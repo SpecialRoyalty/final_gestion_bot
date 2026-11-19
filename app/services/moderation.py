@@ -2,6 +2,7 @@ import time
 import json
 from app.utils.core import member_present, forbidden
 from app.utils.links import contains_link
+from app.services.invite_links import link_valid
 
 class Moderation:
     def check_rights(self,g):
@@ -28,10 +29,10 @@ class Moderation:
         if q['from'].get('is_bot'):
             self.api.call('declineChatJoinRequest',chat_id=g['chat'],user_id=uid);return
         link=self.db.one('SELECT * FROM links WHERE url=?',(q.get('invite_link',{}).get('invite_link',''),))
-        allowed=bool(g['enabled'] and link and link['uid']==uid and link['expires']>time.time() and self.entitled(uid,g))
-        if g['role']=='free' and link and link['gid']==g['id'] and link['purpose']=='public_free' and link['expires']>time.time():
+        allowed=bool(g['enabled'] and link and link['uid']==uid and link_valid(link) and self.entitled(uid,g))
+        if g['role']=='free' and link and link['gid']==g['id'] and link['purpose']=='public_free' and link_valid(link):
             allowed=bool(g['enabled'] and self.entitled(uid,g))
-        if g['role']=='proof' and not allowed and link and link['uid']==uid and link['expires']>time.time() and g['enabled'] and not self.user(uid)['banned']:
+        if g['role']=='proof' and not allowed and link and link['uid']==uid and link_valid(link) and g['enabled'] and not self.user(uid)['banned']:
             used=self.db.one('SELECT 1 FROM proof_used WHERE uid=? AND gid=?',(uid,g['id']))
             allowed=not used and self.proof_eligible(uid,g)
             if allowed:
@@ -67,7 +68,7 @@ class Moderation:
             if g['role']=='portal':
                 link=self.db.one('SELECT * FROM links WHERE url=? AND purpose=?',
                                  (q.get('invite_link',{}).get('invite_link',''),'referral'))
-                if link and link['uid']!=uid and link['expires']>time.time():
+                if link and link['uid']!=uid and link_valid(link):
                     with self.db.transaction():
                         existing=self.db.one('SELECT invitee FROM referrals WHERE invitee=?',(uid,))
                         self.db.run('INSERT INTO referrals(invitee,inviter,joined) VALUES (?,?,?) ON CONFLICT(invitee) DO UPDATE SET present=1,joined=excluded.joined',

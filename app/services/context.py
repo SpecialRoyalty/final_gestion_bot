@@ -2,6 +2,7 @@ import json
 import time
 import uuid
 from app.utils.core import active_access
+from app.services.invite_links import PERMANENT_LINK
 from app.services.telegram import APIError, blocked_recipient, deletion_result
 from app.keyboards.inline import keyboard
 
@@ -182,15 +183,14 @@ class Context:
             self.metric('grant',uid,g['id'])
 
     def link(self, uid, g, purpose='access'):
-        row = self.db.one('SELECT url FROM links WHERE uid=? AND gid=? AND purpose=? AND expires>?',
+        row = self.db.one('SELECT * FROM links WHERE uid=? AND gid=? AND purpose=? AND (expires=-1 OR expires>?) ORDER BY CASE WHEN expires=-1 THEN 0 ELSE 1 END,expires DESC LIMIT 1',
                           (uid,g['id'],purpose,time.time()+60))
-        if row:return row['url']
+        if row:return self.make_link_permanent(row,g) if purpose=='referral' else row['url']
         if purpose != 'referral' and self.entitled(uid,g):
             self.api.call('unbanChatMember',chat_id=g['chat'],user_id=uid,only_if_banned=True)
-        if row: return row['url']
-        expires = int(time.time()+86400 if purpose == 'referral' else time.time()+600)
-        data = dict(chat_id=g['chat'], name=f'{purpose[:3]}:{uid}', expire_date=expires)
-        if purpose != 'referral': data['creates_join_request'] = True
+        expires=PERMANENT_LINK if purpose=='referral' else int(time.time()+600)
+        data=dict(chat_id=g['chat'],name=f'{purpose[:3]}:{uid}')
+        if purpose!='referral':data.update(creates_join_request=True,expire_date=expires)
         result = self.api.call('createChatInviteLink', **data)
         url = result['invite_link']
         self.db.run('INSERT INTO links(url,gid,uid,purpose,expires) VALUES (?,?,?,?,?)',
