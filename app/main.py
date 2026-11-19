@@ -2,10 +2,11 @@ import logging
 import os
 import time
 import threading
+import multiprocessing
 from .db import DB, SchemaMismatch
 from .services.telegram import Telegram
 from .application import App
-from .services.runtime import Acknowledgements, persist_updates, start_workers
+from .services.runtime import Acknowledgements, persist_updates, start_workers, restore_actors
 
 def main():
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
@@ -21,9 +22,11 @@ def main():
     api.call('deleteWebhook',drop_pending_updates=False);app.install_command_menu()
     allowed=['message','edited_message','callback_query','chat_member','my_chat_member','chat_join_request','pre_checkout_query']
     stop=threading.Event();acks=Acknowledgements(Telegram(token,timeout=2,retries=1))
+    restore_actors(db)
     workers=start_workers(url,token,owners,tz,support,app.me,stop)
     from .services.media import run_worker
-    media=threading.Thread(target=run_worker,args=(url,token,stop),daemon=True);media.start();workers.append(media)
+    media_context=multiprocessing.get_context('spawn');media_stop=media_context.Event()
+    media=media_context.Process(target=run_worker,args=(url,token,media_stop),daemon=True);media.start();workers.append(media)
     logging.info('Bot démarré : boutons, modération, arrivées/départs et tâches automatiques séparés.')
     cleanup=0;poll_failures=0
     try:
@@ -36,6 +39,7 @@ def main():
                 db.set('poll:ok',time.time());db.set('callback_ack:errors',acks.errors)
                 app.record_success('poll');poll_failures=0
                 if time.time()-cleanup>3600:
+                    db.run("DELETE FROM update_actors WHERE id IN (SELECT id FROM update_inbox WHERE state='done' AND created<?)",(time.time()-7*86400,))
                     db.run("DELETE FROM update_inbox WHERE state='done' AND created<?",(time.time()-7*86400,));cleanup=time.time()
             except RuntimeError:raise
             except Exception as error:
@@ -43,7 +47,7 @@ def main():
                 app.record_failure('poll',error);stop.wait(min(30,2**min(poll_failures-1,5)))
     except KeyboardInterrupt:pass
     finally:
-        stop.set();acks.close()
+        stop.set();media_stop.set();acks.close()
         for worker in workers:worker.join(timeout=7)
         db.conn.close()
 
