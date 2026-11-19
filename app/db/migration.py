@@ -228,6 +228,10 @@ EXPECTED['launch_reads']={'columns': [{'name': 'uid', 'type': 'BIGINT'}, {'name'
 MIGRATIONS += (("005_fast_dispatch.sql", "CREATE TABLE IF NOT EXISTS update_inbox (id BIGINT PRIMARY KEY, lane TEXT NOT NULL, payload TEXT NOT NULL, created DOUBLE PRECISION NOT NULL, state TEXT NOT NULL DEFAULT 'ready', attempts INTEGER NOT NULL DEFAULT 0, due DOUBLE PRECISION NOT NULL DEFAULT 0); CREATE INDEX IF NOT EXISTS inbox_lane_state ON update_inbox(lane,state,id); CREATE INDEX IF NOT EXISTS referral_inviter_valid ON referrals(inviter,valid); CREATE INDEX IF NOT EXISTS jobs_due ON jobs(due); CREATE INDEX IF NOT EXISTS members_activity ON members(present,media);"),)
 EXPECTED["update_inbox"]={'columns': [{'name': 'id', 'type': 'BIGINT'}, {'name': 'lane', 'type': 'TEXT'}, {'name': 'payload', 'type': 'TEXT'}, {'name': 'created', 'type': 'DOUBLE PRECISION'}, {'name': 'state', 'type': 'TEXT'}, {'name': 'attempts', 'type': 'INTEGER'}, {'name': 'due', 'type': 'DOUBLE PRECISION'}]}
 
+MIGRATIONS += (("006_priority_actors.sql", 'CREATE TABLE IF NOT EXISTS update_actors (id BIGINT PRIMARY KEY, actor TEXT NOT NULL); CREATE INDEX IF NOT EXISTS actor_order ON update_actors(actor,id); CREATE INDEX IF NOT EXISTS ready_updates ON update_inbox(lane,state,due,id); CREATE INDEX IF NOT EXISTS media_due ON media_tasks(due); CREATE INDEX IF NOT EXISTS message_album ON messages(gid,album); CREATE TABLE IF NOT EXISTS failed_actions (id TEXT PRIMARY KEY, kind TEXT NOT NULL, detail TEXT NOT NULL, created DOUBLE PRECISION NOT NULL);'),)
+EXPECTED["update_actors"]={"columns":[{"name":"id","type":"BIGINT"},{"name":"actor","type":"TEXT"}]}
+EXPECTED["failed_actions"]={"columns":[{"name":"id","type":"TEXT"},{"name":"kind","type":"TEXT"},{"name":"detail","type":"TEXT"},{"name":"created","type":"DOUBLE PRECISION"}]}
+
 class SchemaMismatch(RuntimeError):
     pass
 
