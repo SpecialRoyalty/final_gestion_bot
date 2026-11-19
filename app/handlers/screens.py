@@ -8,6 +8,12 @@ from app.utils.group_roles import ROLE_LABELS
 
 class Screens:
     def show(self, uid, page='home'):
+        previous=getattr(self,'_render_languages',None)
+        self._render_languages={} if previous is None else previous
+        try:return self._show(uid,page)
+        finally:self._render_languages=previous
+
+    def _show(self, uid, page='home'):
         user = self.user(uid)
         if not user['permanent'] and self.launch_gate(uid): return
         if page=='language':
@@ -24,7 +30,7 @@ class Screens:
                 managed=[]
                 for candidate in self.db.all('SELECT * FROM groups WHERE enabled=1 ORDER BY title'):
                     try:
-                        if self.admin(uid,candidate): managed.append(candidate)
+                        if self.admin_view(uid,candidate): managed.append(candidate)
                     except Exception as error: self.record_failure('admin_lookup:'+candidate['id'],error)
                 if managed:
                     rows=[[button('⚙️ '+g['title'],'a:'+g['id'])] for g in managed]
@@ -54,7 +60,7 @@ class Screens:
             if g['role'] in ('chat','always') and not self.entitled(uid,g) and n >= g['goal']:
                 self.grant(uid,g,'referral')
             description=self.db.setting('description:'+g['id']+':'+self.language(uid),g['description']).strip() or self.tr(uid,'La présentation de ce groupe est en cours de préparation.')
-            state=self.tr(uid,'🟢 Ouvert') if g['opened'] else self.tr(uid,'🔴 Fermé')
+            state=self.tr(uid,'🟢 Ouvert') if self.display_open(g) else self.tr(uid,'🔴 Fermé')
             text = f'<b>{html.escape(g["title"])}</b>\n{self.tr(uid,ROLE_LABELS.get(g["role"],g["role"]))} · {state}\n\n{html.escape(description)}\n\n'
             rows = []
             if self.entitled(uid,g):
@@ -62,7 +68,7 @@ class Screens:
                 rows += [[button(self.tr(uid,'🚪 Rejoindre le groupe'),url=self.link(uid,g))]]
             elif g['role'] == 'proof':
                 used = self.db.one('SELECT 1 FROM proof_used WHERE uid=? AND gid=?',(uid,g['id']))
-                text += self.tr(uid,'Visite déjà utilisée.') if used else self.tr(uid,'Une visite de 10 minutes, une seule fois.')
+                text += self.tr(uid,'Visite déjà utilisée.') if used else self.tr(uid,'Visite unique : ')+str(self.proof_minutes(g))+self.tr(uid,' minutes.')
                 if not used: rows += [[button(self.tr(uid,'👀 Commencer ma visite'), 'proof:'+g['id'])]]
             else:
                 if g['role'] != 'vip':
@@ -103,7 +109,7 @@ class Screens:
                 error=self.db.setting('portal_error:'+g['id'])
                 if error: text+='\n⚠️ '+html.escape(error)
             elif g['role']=='always': text+='\nOuvert 24 h/24, sous réserve du locker.'
-            elif g['role']=='proof': text+='\nVisite de 10 minutes, une seule fois par personne.'
+            elif g['role']=='proof': text+='\nVisite de '+str(self.proof_minutes(g))+' minutes, une seule fois par personne.'
             elif g['role']=='unset': text+='\nChoisis le rôle pour afficher les réglages correspondants.'
             if g['role'] in ('chat','always','vip') and not self.payment_options(g['id']):
                 text+='\n⚠️ Paiement indisponible : configure au moins un tarif et ses coordonnées de réception.'
@@ -114,7 +120,7 @@ class Screens:
         text=self.tr(uid,'<b>✨ Ton espace</b>\n\nChoisis ton prochain groupe.')
         custom=self.db.setting('welcome_text:'+self.language(uid))
         if custom: text=html.escape(custom)
-        opened=[g for g in groups if g['opened'] and g['role']=='chat']
+        opened=[g for g in groups if self.display_open(g) and g['role']=='chat']
         if opened: text+='\n\n🔥 '+html.escape(opened[0]['title'])+self.tr(uid,' est ouvert !')
         if not groups: text+=self.tr(uid,'\nLes groupes arrivent bientôt.')
         rows += [[button(self.tr(uid,'🔗 Inviter mes amis'),'invite')]]
@@ -123,7 +129,7 @@ class Screens:
         else:
             for g in groups:
                 try:
-                    if self.admin(uid,g): rows += [[button('⚙️ Gérer '+g['title'],'a:'+g['id'])]]
+                    if self.admin_view(uid,g): rows += [[button('⚙️ Gérer '+g['title'],'a:'+g['id'])]]
                 except Exception as error:
                     self.record_failure('admin_lookup:'+g['id'],error)
         text+=self.tr(uid,'\n\n<i>Accueil actualisé le ')+self.time_label(time.time())+'</i>'

@@ -34,6 +34,7 @@ class Callbacks:
                 self.db.run('UPDATE groups SET weekday=? WHERE id=?',(int(parts[2]),g['id']))
                 return self.show(uid,'a:'+g['id'])
             return
+        if self.trial_callback(uid,data):return
         if self.advertising_callback(uid,data): return
         if self.workflow_callback(uid,data): return
         if self.welcome_callback(uid,data): return
@@ -50,10 +51,12 @@ class Callbacks:
         if action=='proof':
             g=self.group(parts[1])
             if not g or g['role']!='proof' or not g['enabled'] or self.user(uid)['banned']: return
+            if not self.proof_eligible(uid,g):
+                return self.screen(uid,self.tr(uid,'Invite au moins une personne et attends la validation de son invitation pour commencer ta visite.'),[[button(self.tr(uid,'🔗 Inviter mes amis'),'invite')],[button(self.tr(uid,'⬅️ Accueil'),'home')]])
             if not self.db.one('SELECT 1 FROM proof_used WHERE uid=? AND gid=?',(uid,g['id'])):
                 # Time starts on actual admission, not on pressing this button.
-                return self.screen(uid,'<b>👀 Ta visite découverte</b>\n10 minutes à partir de ton entrée.',
-                    [[button('🚪 Entrer',url=self.link(uid,g))],[button('⬅️ Retour','home')]])
+                return self.screen(uid,self.tr(uid,'<b>👀 Ta visite découverte</b>')+'\n'+str(self.proof_minutes(g))+self.tr(uid,' minutes à partir de ton entrée.'),
+                    [[button(self.tr(uid,'🚪 Entrer'),url=self.link(uid,g))],[button(self.tr(uid,'⬅️ Retour'),'home')]])
             return self.show(uid,'g:'+g['id'])
         if action=='setting' and uid in self.owners:
             key=parts[1]
