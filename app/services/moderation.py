@@ -1,4 +1,5 @@
 import time
+import json
 from app.utils.core import member_present, forbidden
 from app.utils.links import contains_link
 
@@ -23,28 +24,36 @@ class Moderation:
 
     def join_request(self,q):
         uid=q['from']['id']; g=self.db.one('SELECT * FROM groups WHERE chat=?',(q['chat']['id'],))
-        if not g: return
+        if not g:return
+        if q['from'].get('is_bot'):
+            self.api.call('declineChatJoinRequest',chat_id=g['chat'],user_id=uid);return
         link=self.db.one('SELECT * FROM links WHERE url=?',(q.get('invite_link',{}).get('invite_link',''),))
         allowed=bool(g['enabled'] and link and link['uid']==uid and link['expires']>time.time() and self.entitled(uid,g))
         if g['role']=='free' and link and link['gid']==g['id'] and link['purpose']=='public_free' and link['expires']>time.time():
             allowed=bool(g['enabled'] and self.entitled(uid,g))
         if g['role']=='proof' and not allowed and link and link['uid']==uid and link['expires']>time.time() and g['enabled'] and not self.user(uid)['banned']:
             used=self.db.one('SELECT 1 FROM proof_used WHERE uid=? AND gid=?',(uid,g['id']))
-            allowed=not used
+            allowed=not used and self.proof_eligible(uid,g)
             if allowed:
                 # Reserve once, then give a temporary entitlement; a retry can approve the same request.
                 with self.db.transaction():
                     self.db.run('INSERT INTO proof_used(uid,gid) VALUES (?,?)',(uid,g['id']))
-                    self.grant(uid,g,'proof',time.time()+600)
+                    self.grant(uid,g,'proof',time.time()+self.proof_minutes(g)*60)
         self.api.call('approveChatJoinRequest' if allowed else 'declineChatJoinRequest',chat_id=g['chat'],user_id=uid)
 
     def member(self,q):
         g=self.db.one('SELECT * FROM groups WHERE chat=?',(q['chat']['id'],))
         if not g or not g['enabled']: return
         u=q['new_chat_member']['user']; uid=u['id']
-        if q['new_chat_member']['status']!=q['old_chat_member']['status']:
-            self.db.set('admin_roster:'+str(g['chat']),'{}')
-        if u.get('is_bot'): return
+        if q['new_chat_member']['status']!=q['old_chat_member']['status'] and any(q[k]['status'] in ('administrator','creator') for k in ('new_chat_member','old_chat_member')):
+            key='admin_roster:'+str(g['chat']);cached=json.loads(self.db.setting(key,'{}'))
+            ids=set(cached.get('ids',[]));ids.discard(uid)
+            if q['new_chat_member']['status'] in ('administrator','creator'):ids.add(uid)
+            self.db.set(key,json.dumps({'ids':sorted(ids),'until':0}))
+        if u.get('is_bot'):
+            if uid!=self.me['id'] and member_present(q['new_chat_member']):
+                self.enqueue('banChatMember',dict(chat_id=g['chat'],user_id=uid))
+            return
         present=member_present(q['new_chat_member']); old=member_present(q['old_chat_member'])
         if present==old: return
         self.metric('join' if present else 'leave',uid,g['id'],key=f'member:{g["id"]}:{uid}:{q.get("date",time.time())}:{present}')
@@ -79,21 +88,32 @@ class Moderation:
         if not g or not g['enabled']: return
         uid=m.get('from',{}).get('id',0); mid=m['message_id']
         if m.get('new_chat_members') or m.get('left_chat_member'):
-            self.immediate_delete(g['chat'],mid); return
+            self.immediate_delete(g['chat'],mid)
+            for added in m.get('new_chat_members',[]):
+                if added.get('is_bot') and added['id']!=self.me['id']:self.enqueue('banChatMember',dict(chat_id=g['chat'],user_id=added['id']))
+            return
         media=m.get('photo',[{}])[-1] if m.get('photo') else m.get('video',{})
         fid=media.get('file_unique_id')
         previous=self.db.one('SELECT * FROM messages WHERE gid=? AND mid=?',(g['id'],mid))
         self.db.run('INSERT INTO messages(gid,mid,uid,album,file_id,created) VALUES (?,?,?,?,?,?) ON CONFLICT(gid,mid) DO NOTHING',
                     (g['id'],mid,uid,m.get('media_group_id'),fid,m.get('date',time.time())))
         text=m.get('text',m.get('caption',''))
-        is_admin=self.admin(uid,g) if uid else False
-        if is_admin and uid not in self.owners:is_admin=self.admin(uid,g,fresh=True)
+        # Ordinary media ingestion must not wait on Telegram administrator lookups.
+        anonymous=m.get('sender_chat',{}).get('id')==g['chat']
         reply=m.get('reply_to_message')
-        if text.split(' ')[0].split('@')[0]=='/pedo' and is_admin and reply:
+        command=text.strip().casefold().split(maxsplit=1)[0].split('@')[0] if text.strip() else ''
+        is_admin=anonymous or uid in self.owners
+        sensitive=(command=='/pedo' or contains_link(m) or forbidden(text,self.db.setting('words').splitlines()))
+        if uid and not is_admin and (sensitive or self.admin_view(uid,g)):
+            is_admin=self.admin(uid,g,fresh=True)
+        if command=='/pedo' and is_admin and reply:
             victim=reply.get('from',{}).get('id')
-            if not victim or self.admin(victim,g): return
+            if not victim or self.admin(victim,g,fresh=True):return
             self.ban(victim,True)
             album=reply.get('media_group_id')
+            media_reply=reply.get('photo',[{}])[-1] if reply.get('photo') else reply.get('video',{})
+            self.db.run('INSERT INTO messages(gid,mid,uid,album,file_id,created) VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING',
+                        (g['id'],reply['message_id'],victim,album,media_reply.get('file_unique_id'),reply.get('date',time.time())))
             items=self.db.all('SELECT * FROM messages WHERE gid=? AND '+('album=?' if album else 'mid=?'),(g['id'],album or reply['message_id']))
             for item in items:
                 self.enqueue('deleteMessage',dict(chat_id=g['chat'],message_id=item['mid']))
@@ -117,7 +137,10 @@ class Moderation:
             try: self.api.call('banChatMember',chat_id=g['chat'],user_id=uid,revoke_messages=True)
             except Exception: pass  # A durable network-ban job already exists.
             return
-        if self.user(uid)['permanent'] or (self.user(uid)['banned'] and g['role']!='portal'):
+        account=self.user(uid)
+        if account['permanent'] or (account['banned'] and g['role']!='portal'):
+            if fid and account['permanent']:
+                self.db.run('INSERT INTO fingerprints(file_id,blocked) VALUES (?,1) ON CONFLICT(file_id) DO UPDATE SET blocked=1',(fid,))
             self.enqueue('deleteMessage',dict(chat_id=g['chat'],message_id=mid)); return
         if g['role']=='portal': return
         if forbidden(text,self.db.setting('words').splitlines()):
@@ -130,15 +153,16 @@ class Moderation:
             return
         if reply and '@admin' in text.casefold():
             victim=reply.get('from',{}).get('id')
-            if victim and victim!=uid and not self.admin(victim,g):
+            if victim and victim!=uid and victim not in self.owners:
                 target=str(reply.get('media_group_id') or reply['message_id'])
                 self.db.run('INSERT INTO reports(gid,target,reporter) VALUES (?,?,?) ON CONFLICT DO NOTHING',(g['id'],target,uid))
                 if self.db.one('SELECT COUNT(*) AS n FROM reports WHERE gid=? AND target=?',(g['id'],target))['n']>=4:
-                    self.ban(victim)
+                    if not self.admin(victim,g,fresh=True):self.ban(victim)
         if fid and not (previous and previous['file_id']==fid):
             blocked=self.db.one('SELECT 1 FROM fingerprints WHERE file_id=? AND blocked=1',(fid,))
             duplicate=self.db.one('SELECT 1 FROM seen_media WHERE gid=? AND file_id=?',(g['id'],fid))
             if blocked or (g['anti'] and duplicate):
+                if self.admin(uid,g,fresh=True):return
                 self.enqueue('deleteMessage',dict(chat_id=g['chat'],message_id=mid)); return
             self.db.run('INSERT INTO media_tasks(id,gid,mid,file_id,download_id,kind,due) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING',
                         (g['id']+':'+str(mid),g['id'],mid,fid,media['file_id'],'photo' if m.get('photo') else 'video',time.time()))

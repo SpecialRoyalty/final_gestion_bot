@@ -3,7 +3,7 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from app.utils.core import progress, member_present, window, countdown
-from app.services.telegram import APIError, blocked_recipient
+from app.services.telegram import APIError, blocked_recipient, deletion_result, DeferredRequest
 from app.keyboards.inline import button, keyboard
 
 class Scheduler:
@@ -31,11 +31,7 @@ class Scheduler:
             self.db.set(prefix+':verified',time.time())
             if old:return
         if old and (kind=='status' or kind.startswith('opening:')):
-            try:
-                self.api.call('deleteMessage',chat_id=g['chat'],message_id=old['mid'])
-            except APIError as error:
-                if 'message to delete not found' not in str(error): raise
-            self.db.run('DELETE FROM notices WHERE gid=? AND kind=?',(g['id'],kind))
+            self.remove_notice_now(g,kind)
             old=None
         if photo and len(text.encode('utf-16-le'))//2>1024:
             raise ValueError('Texte du portail trop long pour accompagner une image ; raccourcis-le.')
@@ -112,9 +108,16 @@ class Scheduler:
                     self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],));continue
                 if job['method'].startswith('editMessage') and any(t in str(e) for t in ('message to edit not found','message is not modified')):
                     self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],));continue
-                # A missing message is already deleted. Other failures remain visible/retriable.
-                if job['method']=='deleteMessage' and 'message to delete not found' in str(e):
-                    self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],)); continue
+                result=deletion_result(e) if job['method'] in ('deleteMessage','deleteMessages') else None
+                if result:
+                    if result=='terminal':self.failed_action(job['method'],e,job['id'])
+                    self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],));continue
+                if isinstance(e,DeferredRequest):
+                    self.db.run('UPDATE jobs SET due=? WHERE id=?',(time.time()+e.retry,job['id']));continue
+                if isinstance(e,APIError) and e.code in (400,403):
+                    self.failed_action(job['method'],e,job['id'])
+                    self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],))
+                    self.record_failure('job:'+job['method'],e);continue
                 attempts=job['attempts']+1
                 delay=max(getattr(e,'retry',0),min(3600,2**min(attempts,12)))
                 self.db.run('UPDATE jobs SET attempts=?,due=? WHERE id=?',(attempts,time.time()+delay,job['id']))
@@ -190,8 +193,9 @@ class Scheduler:
                         target=self.db.one('SELECT gid FROM referral_targets WHERE invitee=?',(r['invitee'],))
                         self.metric('referral_valid',r['inviter'],target['gid'] if target else portal['id'],key='valid:'+str(r['invitee']))
                 except Exception as error:
-                    errors.append(type(error).__name__)
-        if errors: raise RuntimeError(f'{len(errors)} invitations non vérifiées : '+', '.join(sorted(set(errors))))
+                    errors.append(error)
+                    if isinstance(error,APIError) and (error.code==429 or error.code>=500 or error.code==0):break
+        if errors:raise errors[0]
 
     def task_expiry(self,now):
         for a in self.db.all('SELECT * FROM access WHERE revoked=0 AND expires IS NOT NULL AND expires<=?',(now,)):
@@ -332,6 +336,30 @@ class Scheduler:
                 self.db.run('UPDATE ads SET next_at=? WHERE id=?',(now+ad['interval_hours']*3600+1,ad['id']))
             except Exception as error:self.record_failure('ads:'+g['id'],error)
 
+    def task_rosters(self,now):
+        # Refresh outside private interactions. One roster per cycle, no join-triggered invalidation.
+        groups=self.db.all('SELECT * FROM groups WHERE enabled=1 ORDER BY id')
+        for g in groups:
+            key='admin_roster:'+str(g['chat'])
+            cached=json.loads(self.db.setting(key,'{}'))
+            if cached.get('until',0)>now:continue
+            members=self.api.call('getChatAdministrators',chat_id=g['chat'])
+            self.db.set(key,json.dumps({'until':now+300,'ids':[m['user']['id'] for m in members if m['status'] in ('administrator','creator')]}))
+            break
+
+    def display_open(self,g,now=None):
+        if not g['enabled']:return False
+        if g['opened'] or g['role'] in ('always','vip','proof'):return True
+        now=time.time() if now is None else now
+        local=datetime.fromtimestamp(now,ZoneInfo(self.tz))
+        for day in (local.date()-timedelta(days=1),local.date()):
+            selected=(g['role']=='free' and day.weekday()==g['weekday'])
+            if g['role']=='chat':selected=bool(self.db.one('SELECT 1 FROM sessions WHERE day=? AND gid=?',(day.isoformat(),g['id'])))
+            if selected:
+                a,b=window(day,g['slot'],self.tz)
+                if a<=now<b:return True
+        return False
+
     def tick(self):
         now=time.time()
         if now-self.last_tick<20: return
@@ -342,7 +370,7 @@ class Scheduler:
             self.alert(warning); self.db.set('media_warning','')
         failed=[]
         # Opening/countdowns do not depend on successful referral checks or queue delivery.
-        for name in ('expiry','schedule','announcements','referrals','activity','ads','rights','diagnostics'):
+        for name in ('expiry','schedule','announcements','referrals','activity','ads','rights','diagnostics','rosters'):
             self.db.set('task:'+name+':attempt',time.time())
             try:
                 getattr(self,'task_'+name)(now)

@@ -2,15 +2,18 @@
 import time
 import math
 from app.keyboards.inline import button
-from app.services.telegram import APIError
+from app.services.telegram import APIError, DeferredRequest, deletion_result
 
 class Promotions:
     def remove_notice_now(self,g,kind):
         old=self.db.one('SELECT mid FROM notices WHERE gid=? AND kind=?',(g['id'],kind))
         if not old:return
+        key=f'notice-delete:{g["chat"]}:{old["mid"]}'
+        if self.db.one('SELECT 1 FROM failed_actions WHERE id=?',(key,)):raise DeferredRequest(300)
         try:self.api.call('deleteMessage',chat_id=g['chat'],message_id=old['mid'])
         except APIError as error:
-            if 'message to delete not found' not in str(error):raise
+            if deletion_result(error)=='terminal':self.failed_action('notice_delete',error,key)
+            if deletion_result(error)!='gone':raise
         self.db.run('DELETE FROM notices WHERE gid=? AND kind=?',(g['id'],kind))
 
     def free_portal_link(self,g):

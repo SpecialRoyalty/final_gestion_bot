@@ -9,7 +9,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from app.keyboards.inline import button
 from app.services.payments import money
-from app.services.telegram import transient_error
+from app.services.telegram import transient_error, DeferredRequest
 
 
 def safe_error(error):
@@ -29,6 +29,7 @@ class Monitoring:
         self.db.set(key+':failure_count',0)
 
     def record_failure(self,key,error):
+        if isinstance(error,DeferredRequest):return
         message=safe_error(error);now=time.time()
         last=float(self.db.setting(key+':error_at','0'))
         count=int(self.db.setting(key+':failure_count','0'))+1 if now-last<300 else 1
@@ -38,7 +39,7 @@ class Monitoring:
         # Keep every current failure visible in diagnostics; notify only persistent outages.
         if transient_error(error):
             logging.info('%s — incident temporaire (%s)',key,type(error).__name__)
-            if count>=3:self.alert('Incident persistant '+key+' : '+message)
+            if count>=3:self.alert('Incident Telegram persistant : '+message+' Consulter l’état du réseau pour les groupes concernés.')
         else:
             logging.warning('%s — %s',key,message)
             self.alert(key+' : '+message)
@@ -110,10 +111,14 @@ class Monitoring:
         pending=self.db.one("SELECT COUNT(*) AS n FROM update_inbox WHERE state='ready'")['n']
         failed_updates=self.db.one("SELECT COUNT(*) AS n FROM update_inbox WHERE state='failed'")['n']
         lines.append(f'Événements en attente : {pending} · échecs à examiner : {failed_updates}')
+        failed=self.db.one('SELECT COUNT(*) AS n FROM failed_actions')['n']
+        lines.append(f'Actions arrêtées, à examiner : {failed}')
+        for item in self.db.all('SELECT kind,detail FROM failed_actions ORDER BY created DESC LIMIT 3'):
+            lines.append('⚠️ '+html.escape(item['kind']+' : '+item['detail']))
         lines.append('Accusés boutons en échec (sans bloquer l’action) : '+self.db.setting('callback_ack:errors','0'))
-        for lane in ('private:0','private:1','private:2','private:3','service'):
+        for lane in ('private:0','private:1','private:2','private:3','service','admission','urgent:0','urgent:1'):
             duration=self.db.setting('latency:'+lane+':ms')
-            if duration:lines.append(lane+' : dernier traitement '+duration+' ms · délai total '+self.db.setting('latency:'+lane+':queue_ms','0')+' ms')
+            if duration:lines.append(lane+' : dernier traitement '+duration+' ms · attente avant traitement '+self.db.setting('latency:'+lane+':queue_ms','0')+' ms')
         incidents=self.db.all('SELECT key,value FROM settings WHERE key LIKE ? AND value!=? ORDER BY key',('%:error',''))
         recent=[]
         for incident in incidents:

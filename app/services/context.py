@@ -2,7 +2,7 @@ import json
 import time
 import uuid
 from app.utils.core import active_access
-from app.services.telegram import APIError, blocked_recipient
+from app.services.telegram import APIError, blocked_recipient, deletion_result
 from app.keyboards.inline import keyboard
 
 class Context:
@@ -25,6 +25,8 @@ class Context:
             self.record_failure('commands',error)
 
     def user(self, uid):
+        existing=self.db.one('SELECT * FROM users WHERE id=?',(uid,))
+        if existing:return existing
         self.db.run('INSERT INTO users(id) VALUES (?) ON CONFLICT(id) DO NOTHING', (uid,))
         return self.db.one('SELECT * FROM users WHERE id=?', (uid,))
 
@@ -48,6 +50,18 @@ class Context:
             self.db.set(key,json.dumps(cached))
         return uid in cached.get('ids',[])
 
+    def admin_view(self,uid,group):
+        """Cached navigation hint only; mutations still verify rights with Telegram."""
+        if uid in self.owners:return True
+        if not group or not group['enabled']:return False
+        cached=json.loads(self.db.setting('admin_roster:'+str(group['chat']),'{}'))
+        return uid in cached.get('ids',[])
+
+    def failed_action(self,kind,detail,key=None):
+        from app.services.monitoring import safe_error
+        self.db.run('INSERT INTO failed_actions(id,kind,detail,created) VALUES (?,?,?,?) ON CONFLICT DO NOTHING',
+                    (key or uuid.uuid4().hex,kind,safe_error(detail),time.time()))
+
     def answer_callback(self,q):
         if q.get('_acknowledged'): return
         try: self.api.call('answerCallbackQuery',callback_query_id=q['id'])
@@ -59,7 +73,9 @@ class Context:
     def immediate_delete(self,chat_id,message_id):
         try: self.api.call('deleteMessage',chat_id=chat_id,message_id=message_id)
         except APIError as error:
-            if 'message to delete not found' not in str(error):
+            result=deletion_result(error)
+            if result=='terminal':self.failed_action('deleteMessage',error,f'delete:{chat_id}:{message_id}')
+            if not result:
                 self.enqueue('deleteMessage',dict(chat_id=chat_id,message_id=message_id))
 
     def alert(self, text):
@@ -81,8 +97,12 @@ class Context:
 
     def language(self,uid):
         from app.utils.i18n import LANGUAGES
+        cache=getattr(self,'_render_languages',None)
+        if cache is not None and uid in cache:return cache[uid]
         value=self.db.setting('language:'+str(uid),'fr')
-        return value if value in LANGUAGES else 'fr'
+        value=value if value in LANGUAGES else 'fr'
+        if cache is not None:cache[uid]=value
+        return value
 
     def tr(self,uid,text):
         from app.utils.i18n import translate
@@ -127,10 +147,13 @@ class Context:
             except Exception as error:
                 if blocked_recipient(error):
                     self.db.set('dm_blocked:'+str(uid),time.time());return
-                # Keep a working new panel if Telegram cannot delete an old message.
-                self.enqueue('deleteMessage',dict(chat_id=uid,message_id=old_menu),due=time.time()+5)
+                result=deletion_result(error)
+                if result=='gone':return
+                if result=='terminal':self.failed_action('panel_cleanup',error,f'delete:{uid}:{old_menu}')
+                # Keep a working new panel and retire obsolete buttons.
+                if not result:self.enqueue('deleteMessage',dict(chat_id=uid,message_id=old_menu),due=time.time()+5)
                 self.enqueue('editMessageReplyMarkup',dict(chat_id=uid,message_id=old_menu,reply_markup={'inline_keyboard':[]}))
-                self.record_failure('panel_cleanup',error)
+                if not result:self.record_failure('panel_cleanup',error)
 
     def count(self, uid, gid=None):
         if gid is None:
@@ -161,6 +184,7 @@ class Context:
     def link(self, uid, g, purpose='access'):
         row = self.db.one('SELECT url FROM links WHERE uid=? AND gid=? AND purpose=? AND expires>?',
                           (uid,g['id'],purpose,time.time()+60))
+        if row:return row['url']
         if purpose != 'referral' and self.entitled(uid,g):
             self.api.call('unbanChatMember',chat_id=g['chat'],user_id=uid,only_if_banned=True)
         if row: return row['url']
