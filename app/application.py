@@ -21,6 +21,8 @@ from app.services.promotions import Promotions
 
 from app.handlers.trials import Trials
 
-class App(Trials, Promotions, Advertising, MemberWorkflows, Welcome, Readiness, Monitoring, Context, Screens, Callbacks, LegacyPayments, Router,
+from app.services.invite_links import InviteLinks
+
+class App(InviteLinks, Trials, Promotions, Advertising, MemberWorkflows, Welcome, Readiness, Monitoring, Context, Screens, Callbacks, LegacyPayments, Router,
           Moderation, Scheduler, ManualPayments, PaymentScreens):
     """Composition root: handlers, services and adapters share one application context."""
