@@ -1,3 +1,21 @@
+## Version 15 — liens de partage sans expiration
+
+Les invitations personnelles de partage vers le portail, ainsi que les liens publics des groupes gratuits, sont créées **sans date d’expiration Telegram**. Une visite ultérieure du menu réutilise la même adresse, même après plusieurs jours, sans appel Telegram supplémentaire. Chaque invitation conserve son auteur et son groupe cible ; le décompte ne change pas.
+
+Au déploiement, le bot prolonge progressivement les anciens liens de partage **encore valables**, un par cycle en arrière-plan, sans changer leur adresse. Consulter son invitation prolonge immédiatement le lien encore actif. La base n’enregistre le caractère permanent qu’après confirmation Telegram. Une erreur entraîne une reprise différée et reste visible dans les diagnostics. Les liens déjà expirés ne sont pas réactivés par cette version : rouvrir **Inviter mes amis** fournit un nouveau lien permanent à partager.
+
+**Régénérer mon lien** reste disponible : cette action révoque l’ancien lien, même permanent, sans retirer les invitations déjà validées. Remplacer le groupe Telegram met en file la révocation de ses anciens liens. Un lien peut aussi être révoqué manuellement dans Telegram ; « sans expiration » ne signifie pas irrévocable.
+
+Les liens personnels d’entrée dans les chats restent valables dix minutes et sont liés au bénéficiaire. Le contrôle des accès payants, des bannissements et des durées de visite demeure actif. Un lien public permanent d’un groupe gratuit conserve la validation d’entrée par le bot.
+
+Déploiement : remplacer le code puis redéployer avec la même base et **un seul replica**, comme pour la version 14. Aucun changement de schéma requis. La convention interne `links.expires=-1` signifie permanent ; `0` reste révoqué ; une valeur positive conserve sa date limite. Ne pas redéployer une ancienne version qui ignore cette convention.
+
+Vérifications : stabilité après un an simulé, suivi des invitations, prolongation sans changement d’adresse, erreurs sans faux succès, liens expirés/révoqués non réactivés, conversion progressive, accès gratuit contrôlé et régénération. Les appels Telegram sont simulés ; la conversion réelle s’effectuera après déploiement.
+
+Documentation Telegram : https://core.telegram.org/bots/api#createchatinvitelink et https://core.telegram.org/bots/api#editchatinvitelink.
+
+---
+
 ## Version 14 — priorité au temps de réaction
 
 Cette section décrit la version actuelle ; les sections précédentes conservent l’historique.
