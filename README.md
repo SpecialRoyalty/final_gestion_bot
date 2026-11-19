@@ -1,3 +1,41 @@
+## Version 14 — priorité au temps de réaction
+
+Cette section décrit la version actuelle ; les sections précédentes conservent l’historique.
+
+### Déployer
+
+Remplacer le code, conserver la base et les variables existantes, puis redéployer avec **un seul replica Railway**. La migration embarquée `006_priority_actors.sql` ajoute les index de file, les identifiants de conversation et les diagnostics d’actions arrêtées, sans effacer les données. Les événements en attente sont réaffectés aux nouvelles files au démarrage. Prévoir **environ 14 connexions PostgreSQL** : 13 pour le processus principal et ses threads, une pour le processus média. Le transport et les caches sont propres à chaque processus. Aucun `expected.json` externe n’est nécessaire.
+
+### Ce qui réduit le délai
+
+- L’accueil utilise la liste d’administrateurs mémorisée : aucun appel `getChatAdministrators` avant d’afficher un accueil membre. Un rafraîchissement de liste est effectué en arrière-plan, un groupe par cycle. Un nouvel administrateur peut devoir actualiser après ce rafraîchissement ; les promotions/démotions reçues mettent immédiatement le cache à jour. Les changements sensibles contrôlent toujours les droits actuels.
+- Un arrivant ordinaire ne vide plus le cache administrateur. L’ingestion d’un média ordinaire ne consulte pas les administrateurs via Telegram.
+- Un événement reçu réveille immédiatement son worker. Les requêtes SQL d’attente à vide sont espacées ; une reprise arrivée à échéance est détectée sous 250 ms hors charge et temps de requête.
+- Une reprise retardée bloque uniquement les événements suivants du même utilisateur dans la même file. Les autres utilisateurs du worker continuent.
+- Suppressions des arrivées/départs, admissions et signalements `/pedo` / réponses `@admin` ont leurs files distinctes. Les opérations de modération urgentes peuvent dépasser les messages ordinaires du même groupe ; les règles de ban restent persistantes et s’appliquent aux messages traités ensuite.
+- L’analyse des médias tourne dans **un processus séparé**, avec un seul média traité à la fois. Un fichier déjà analysé est réutilisé sans téléchargement/décodage supplémentaire. Cela réduit la contention Python ; une machine saturée en CPU ou mémoire peut néanmoins ralentir tous les processus.
+- Connexions HTTPS réutilisées par thread. Les tâches secondaires ont une capacité limitée pour préserver les interactions. Une réponse `429` déclenche un délai avant les prochains appels au chat concerné ; ce délai n’endort pas le worker et ne consomme pas son budget de tentatives. Les appels de polling restent indépendants.
+- Un lien d’accès personnel encore valable est réutilisé sans appel Telegram de débannissement systématique.
+
+### Erreurs et suivi
+
+Une suppression « message introuvable » est terminée. Une suppression définitivement refusée est arrêtée et visible dans **État du réseau**, au lieu d’être relancée indéfiniment. Une annonce dont la suppression est définitivement refusée reste suivie et bloque son remplacement pour éviter les doublons ; un administrateur doit examiner le message et les droits. Les analyses impossibles ou ayant échoué cinq fois sont arrêtées et comptées. Les alertes réseau identiques sont regroupées ; les nouvelles erreurs de code restent signalées.
+
+**Administration → État du réseau** distingue maintenant l’attente avant traitement et la durée de traitement des dernières interactions, en millisecondes. La durée inclut les appels Telegram du traitement, mais pas le délai de transport entre le téléphone et la réception par le polling. Utiliser ces mesures après déploiement pour comparer aux lenteurs observées. Aucun test local ne garantit une latence réseau réelle ni l’absence future de pannes Telegram.
+
+### Autres ajustements de la demande jointe
+
+- Groupe **Preuve → Durée et condition de visite** : 5, 10, 15, 30, 60, 120, 240 ou 1440 minutes ; valeur initiale 10 minutes. La durée commence à l’admission. La condition ON exige au moins une invitation réelle validée dans le réseau, pas un simple clic de partage ni une récompense de bug. Le contrôle est effectué aussi à l’entrée, même avec un lien obtenu auparavant. Une visite par personne ; les visites déjà commencées gardent leur échéance.
+- Les autres bots ajoutés sont exclus via la file de modération ; le bot du réseau est exempté. Telegram peut refuser l’exclusion d’un administrateur : l’action arrêtée et l’erreur restent visibles, il faut alors lui retirer ses droits.
+- `/pedo` reconnaît les administrateurs anonymes du groupe et traite une réponse même si le message original n’était pas encore indexé. Les quatre signalements `@admin` doivent toujours provenir de personnes distinctes.
+- La fiche membre d’un groupe gratuit/classique affiche le statut promotionnel ouvert pendant son créneau, même si le locker maintient les permissions fermées, comme l’annonce du portail. Les droits réels ne sont pas modifiés par cet affichage.
+
+### Vérifications
+
+La suite couvre les reprises sans blocage des autres utilisateurs, la priorité devant 1 000 messages, les appels évités sur l’accueil et les liens, les limites Telegram, les suppressions terminales, les visites, les bots ajoutés, les signalements et le démarrage du processus média. Les appels Telegram sont simulés. Les migrations sont aussi exercées sur PostgreSQL 16.2 en mode local.
+
+---
+
 # Bot Telegram — réseau de groupes
 
 Version de préproduction, Python 3.12 / PostgreSQL / Railway. Interface en français.
