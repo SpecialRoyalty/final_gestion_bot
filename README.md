@@ -1,3 +1,45 @@
+## Version 16 — remplacement du portail, incidents et admissions
+
+### Déployer avant de remplacer le portail
+
+Conserver la base et les variables, installer ce code puis redéployer avec **un seul replica Railway**. La migration embarquée `007_recovery.sql` ajoute les campagnes de remplacement, les suspensions de groupes et les détails des échecs médias. Prévoir environ **16 connexions PostgreSQL** (deux files d’admission et un worker de notifications dédié). Les migrations précédentes ne sont pas modifiées.
+
+### Remplacer et prévenir
+
+Dans **Administration → portail → Remplacer le groupe Telegram**, indiquer le nouveau supergroupe privé où le bot dispose de ses droits. Après vérification, les objectifs d’invitation sont sauvegardés avant de retirer les anciens liens. Le worker dédié prépare de nouveaux liens permanents pour les objectifs précédemment utilisés, puis envoie une notification dans la langue choisie, avec un bouton **Inviter mes amis**. Les invitations déjà validées et les accès sont conservés. Les invitations non encore validées doivent être constatées dans le nouveau portail ; leur ancienne présence n’est pas assimilée à une présence dans le nouveau.
+
+Tous les utilisateurs connus sont comptabilisés. Ceux qui n’ont jamais ouvert leur espace privé, ont bloqué le bot ou sont définitivement bannis sont non joignables ; le bot ne peut pas leur garantir un message privé. Les notifications et leur progression survivent au redémarrage. Une réponse perdue pendant l’envoi donne un état « résultat non confirmé » : pas de renvoi automatique pouvant créer un doublon. **État du réseau → Notifications du portail : relancer** permet à l’admin de relancer les échecs, ou d’accepter explicitement le risque de doublon des livraisons non confirmées.
+
+Les anciennes adresses Telegram ne sont pas transférables et les publications partagées par les utilisateurs ne peuvent pas être réécrites par le bot. La notification leur demande de remplacer leurs liens publiés. Installer cette version avant le remplacement : aucune campagne rétroactive n’est inventée pour un remplacement déjà effectué par une ancienne version.
+
+### Portail ou groupe inaccessible
+
+Une réponse explicite indiquant que le bot est expulsé/absent, ou un événement Telegram confirmant son retrait ou sa perte du rôle administrateur, suspend le groupe sans supprimer sa configuration. Les tâches périodiques cessent de le sélectionner et les jobs de ce chat restent en attente, sans appels Telegram répétés. Une seule alerte est créée ; sa déduplication est atomique entre workers. **Une erreur réseau, un 502 ou un délai expiré ne désactive jamais un groupe.**
+
+Réajouter le bot avec ses droits puis cliquer **Activer** vérifie les permissions et reprend le groupe. Un remplacement reprend l’état activé antérieur à la suspension. Les tâches visant un ancien portail inaccessible ne sont pas envoyées au nouveau chat, car leurs identifiants de messages appartiennent à l’ancien.
+
+### Médias et anciens panneaux
+
+L’ancien message « analyses arrêtées » ne permettait pas de distinguer le réseau, le décodage et la taille du fichier. Les nouvelles erreurs conservent une cause, le groupe, le message et les données nécessaires à une reprise. Un fichier trop gros pour le téléchargement via l’API Telegram standard (limite documentée de 20 MB) est indiqué comme non analysable visuellement ; il ne provoque plus des alarmes répétées. La détection des liens et des identifiants de médias déjà connus demeure indépendante, mais aucune analyse visuelle complète n’est prétendue pour un fichier non téléchargé.
+
+Les erreurs réseau/décodages trop longs ont des reprises bornées. **État du réseau → Réessayer les médias temporaires** remet jusqu’à 20 dossiers admissibles en file ; un ancien message n’est jamais réanalysé comme s’il appartenait au groupe Telegram de remplacement. Les anciens dossiers dont l’ancienne version n’a pas conservé le détail ne peuvent pas être reconstitués automatiquement. Les compteurs historiques restent visibles, regroupés par cause, plutôt que trois fois la même erreur de panneau.
+
+Telegram refuse notamment la suppression de messages âgés de plus de 48 heures. Pour les nouveaux panneaux dont l’âge est connu, le bot évite cet appel impossible et retire les anciens boutons. Le texte de l’ancien message peut rester présent : cette limite Telegram n’est pas masquée comme une suppression réussie.
+
+### Réactivité
+
+Les admissions utilisent deux files, réparties par utilisateur. Une reprise d’un arrivant ne bloque plus tous les arrivants de son groupe. Les notifications du remplacement utilisent leur propre worker et la capacité d’arrière-plan, séparée des boutons, admissions et suppressions. Une saturation locale passagère reporte brièvement la requête au lieu d’imposer systématiquement une seconde ; les délais `retry_after` imposés par Telegram sont toujours respectés. Le décodage vidéo limite aussi les threads des filtres.
+
+Les derniers délais avant traitement et de traitement restent mesurés dans État du réseau. Les tests de concurrence bloquent une admission et une campagne et vérifient que d’autres admissions/boutons progressent. Ils simulent Telegram : ils ne promettent ni une latence de production ni la disparition de toutes les interruptions réseau.
+
+### Validation
+
+213 tests exécutés : 207 réussis, 6 intégrations PostgreSQL réseau ignorées dans cet environnement. Schéma, requêtes de migration et campagnes vérifiés séparément avec PostgreSQL 16.2 en mode local. Imports et démarrage du schéma vérifiés sans identifiants Telegram. Les règles manquantes restent à saisir par l’admin ; aucun texte de règles n’est inventé.
+
+Références Telegram : https://core.telegram.org/bots/api#getfile et https://core.telegram.org/bots/api#deletemessage.
+
+---
+
 ## Version 15 — liens de partage sans expiration
 
 Les invitations personnelles de partage vers le portail, ainsi que les liens publics des groupes gratuits, sont créées **sans date d’expiration Telegram**. Une visite ultérieure du menu réutilise la même adresse, même après plusieurs jours, sans appel Telegram supplémentaire. Chaque invitation conserve son auteur et son groupe cible ; le décompte ne change pas.
