@@ -30,6 +30,6 @@ def group_controls(group,owner):
         if role!='unset':
             label='⏸ Désactiver' if group['enabled'] else ('✅ Activer et publier' if role=='portal' else '✅ Activer')
             rows.append([button(label,'toggle:'+gid+':enabled')])
-        rows.append([button('🔁 Remplacer le groupe Telegram','edit:'+gid+':chat')])
+        rows.append([button('🔁 Remplacer le groupe Telegram','replacelist:'+gid)])
     rows.append([button('🔄 Actualiser','a:'+gid),button('⬅️ Administration','admin' if owner else 'home')])
     return rows
