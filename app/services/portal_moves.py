@@ -17,6 +17,7 @@ class PortalMoves:
         return move
 
     def portal_move_step(self):
+        if float(self.db.setting('portal_move:rate_limit_until','0'))>time.time():return False
         row=self.db.one("SELECT r.*,m.gid,m.new_chat FROM portal_recipients r JOIN portal_moves m ON m.id=r.move_id WHERE r.state='ready' AND r.due<=? ORDER BY m.created,r.uid LIMIT 1",(time.time(),))
         if not row:return False
         uid=row['uid'];ident=(row['move_id'],uid);g=self.group(row['gid'])
@@ -33,12 +34,15 @@ class PortalMoves:
                 goal=self.group(target['target'])
                 url=self.target_link(uid,goal,g) if goal and goal['enabled'] and goal['role'] in ('chat','always') else ''
                 self.db.run('UPDATE portal_targets SET url=? WHERE move_id=? AND uid=? AND target=?',(url,*ident,target['target']))
+                self.record_success('portal_move')
                 return True
             text=self.tr(uid,'📢 Le portail a changé. Tes invitations validées et tes accès sont conservés. Tes nouveaux liens sont disponibles dans « Inviter mes amis ». Remplace les anciens liens dans tes partages.')
             rows=[[button(self.tr(uid,'🔗 Inviter mes amis'),url=self.deep('invite'))],[button(self.tr(uid,'⬅️ Accueil'),url=self.deep())]]
             self.db.run("UPDATE portal_recipients SET state='sending' WHERE move_id=? AND uid=?",ident);sending=True
             self.api.call('sendMessage',chat_id=uid,text=text,reply_markup=keyboard(*rows))
             self.db.run("UPDATE portal_recipients SET state='sent' WHERE move_id=? AND uid=?",ident)
+            self.record_success('portal_move')
+            self.db.set('portal_move:rate_limit_until',0)
         except Exception as error:
             if blocked_recipient(error):
                 self.db.set('dm_blocked:'+str(uid),time.time());state='unreachable'
@@ -48,8 +52,12 @@ class PortalMoves:
             elif isinstance(error,DeferredRequest) or isinstance(error,APIError) and error.code==429:state='ready'
             elif row['attempts']+1>=5:state='failed'
             else:state='ready'
-            attempts=row['attempts']+(0 if isinstance(error,DeferredRequest) else 1)
+            rate_limited=isinstance(error,APIError) and error.code==429
+            if rate_limited and not isinstance(error,DeferredRequest):
+                self.db.set('portal_move:rate_limit_until',time.time()+max(1,error.retry)+.25)
+                self.record_success('portal_move')
+            attempts=row['attempts']+(0 if rate_limited else 1)
             self.db.run('UPDATE portal_recipients SET state=?,attempts=?,due=? WHERE move_id=? AND uid=?',
                         (state,attempts,time.time()+max(getattr(error,'retry',0),1 if isinstance(error,DeferredRequest) else min(300,2**min(attempts,8))),*ident))
-            if state not in ('unreachable','uncertain'):self.record_failure('portal_move',error)
+            if state not in ('unreachable','uncertain') and not rate_limited:self.record_failure('portal_move',error)
         return True

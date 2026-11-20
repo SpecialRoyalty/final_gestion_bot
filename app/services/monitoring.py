@@ -121,6 +121,8 @@ class Monitoring:
                'Réception Telegram : '+pulse('poll:ok'),
                'Dernier cycle terminé : '+pulse('scheduler:completed'),
                'Traitement médias : '+pulse('media:heartbeat')]
+        until=float(self.db.setting('portal_move:rate_limit_until','0'))
+        if until>now:lines.append('⏳ Notifications du portail : pause Telegram, reprise dans '+str(__import__('math').ceil(until-now))+' s.')
         pending=self.db.one("SELECT COUNT(*) AS n FROM update_inbox WHERE state='ready'")['n']
         failed_updates=self.db.one("SELECT COUNT(*) AS n FROM update_inbox WHERE state='failed'")['n']
         lines.append(f'Événements en attente : {pending} · échecs à examiner : {failed_updates}')

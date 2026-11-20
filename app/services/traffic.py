@@ -6,7 +6,7 @@ import math
 class TrafficGate:
     def __init__(self):
         self.lock=threading.Lock();self.active=0;self.background=0
-        self.tokens=3.;self.last=time.monotonic();self.cooldowns={};self.network_until=0;self.failures=0
+        self.tokens=3.;self.last=time.monotonic();self.cooldowns={};self.network_until=0;self.failures=0;self.link_next={}
     def enter(self,method,chat,background):
         now=time.monotonic()
         with self.lock:
@@ -15,7 +15,10 @@ class TrafficGate:
             if background:retry=max(retry,self.network_until-now)
             self.tokens=min(3.,self.tokens+(now-self.last)*3);self.last=now
             if retry>0:return max(1,math.ceil(retry))
+            bulk_link=background and method in ('createChatInviteLink','editChatInviteLink','revokeChatInviteLink')
+            if bulk_link and self.link_next.get(chat,0)>now:return self.link_next[chat]-now
             if self.active>=8 or (background and (self.background>=1 or self.tokens<1)):return .1
+            if bulk_link:self.link_next[chat]=now+2
             self.active+=1
             if background:self.background+=1;self.tokens-=1
             return 0
@@ -24,7 +27,7 @@ class TrafficGate:
             self.active-=1
             if background:self.background-=1
     def limited(self,chat,seconds):
-        with self.lock:self.cooldowns[chat if chat is not None else 'all']=time.monotonic()+max(1,seconds)
+        with self.lock:self.cooldowns[chat if chat is not None else 'all']=max(self.cooldowns.get(chat if chat is not None else 'all',0),time.monotonic()+max(1,seconds))
     def failure(self):
         with self.lock:
             self.failures+=1

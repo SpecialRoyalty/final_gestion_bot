@@ -10,9 +10,9 @@ class APIError(Exception):
         super().__init__(data.get('description','Telegram unavailable'))
 
 class NetworkError(APIError):
-    def __init__(self,method):
-        self.method=method
-        super().__init__({'error_code':0,'description':'Connexion Telegram interrompue ('+method+'). Résultat non confirmé.'})
+    def __init__(self,method,cause=None):
+        self.method=method;self.cause=cause
+        super().__init__({'error_code':0,'description':'Connexion Telegram interrompue ('+method+'). Résultat non confirmé.'+(' Cause : '+cause+'.' if cause else '')})
 
 class DeferredRequest(APIError):
     def __init__(self,retry=1):
@@ -68,6 +68,6 @@ class Telegram:
                     self.gate.success();return result['result']
                 except (OSError,http.client.HTTPException) as error:
                     self._close();self.gate.failure()
-                    if attempt+1>=attempts:raise NetworkError(method) from None
+                    if attempt+1>=attempts:raise NetworkError(method,type(error).__name__) from None
                     time.sleep(.25*(attempt+1))
         finally:self.gate.leave(background)
