@@ -232,6 +232,14 @@ MIGRATIONS += (("006_priority_actors.sql", 'CREATE TABLE IF NOT EXISTS update_ac
 EXPECTED["update_actors"]={"columns":[{"name":"id","type":"BIGINT"},{"name":"actor","type":"TEXT"}]}
 EXPECTED["failed_actions"]={"columns":[{"name":"id","type":"TEXT"},{"name":"kind","type":"TEXT"},{"name":"detail","type":"TEXT"},{"name":"created","type":"DOUBLE PRECISION"}]}
 
+
+MIGRATIONS += (("007_recovery.sql", "CREATE TABLE IF NOT EXISTS group_pauses (chat BIGINT PRIMARY KEY, gid TEXT NOT NULL, was_enabled INTEGER NOT NULL, reason TEXT NOT NULL, created DOUBLE PRECISION NOT NULL); CREATE TABLE IF NOT EXISTS portal_moves (id TEXT PRIMARY KEY, gid TEXT NOT NULL, old_chat BIGINT NOT NULL, new_chat BIGINT NOT NULL, created DOUBLE PRECISION NOT NULL); CREATE TABLE IF NOT EXISTS portal_recipients (move_id TEXT NOT NULL, uid BIGINT NOT NULL, state TEXT NOT NULL DEFAULT 'ready', attempts INTEGER NOT NULL DEFAULT 0, due DOUBLE PRECISION NOT NULL DEFAULT 0, PRIMARY KEY(move_id,uid)); CREATE TABLE IF NOT EXISTS portal_targets (move_id TEXT NOT NULL, uid BIGINT NOT NULL, target TEXT NOT NULL, url TEXT, PRIMARY KEY(move_id,uid,target)); CREATE TABLE IF NOT EXISTS media_failures (id TEXT PRIMARY KEY, payload TEXT NOT NULL, category TEXT NOT NULL, detail TEXT NOT NULL, created DOUBLE PRECISION NOT NULL); CREATE INDEX IF NOT EXISTS portal_dispatch ON portal_recipients(state,due);"),)
+EXPECTED['group_pauses']={'columns': [{'name': 'chat', 'type': 'BIGINT'}, {'name': 'gid', 'type': 'TEXT'}, {'name': 'was_enabled', 'type': 'INTEGER'}, {'name': 'reason', 'type': 'TEXT'}, {'name': 'created', 'type': 'DOUBLE PRECISION'}]}
+EXPECTED['portal_moves']={'columns': [{'name': 'id', 'type': 'TEXT'}, {'name': 'gid', 'type': 'TEXT'}, {'name': 'old_chat', 'type': 'BIGINT'}, {'name': 'new_chat', 'type': 'BIGINT'}, {'name': 'created', 'type': 'DOUBLE PRECISION'}]}
+EXPECTED['portal_recipients']={'columns': [{'name': 'move_id', 'type': 'TEXT'}, {'name': 'uid', 'type': 'BIGINT'}, {'name': 'state', 'type': 'TEXT'}, {'name': 'attempts', 'type': 'INTEGER'}, {'name': 'due', 'type': 'DOUBLE PRECISION'}]}
+EXPECTED['portal_targets']={'columns': [{'name': 'move_id', 'type': 'TEXT'}, {'name': 'uid', 'type': 'BIGINT'}, {'name': 'target', 'type': 'TEXT'}, {'name': 'url', 'type': 'TEXT'}]}
+EXPECTED['media_failures']={'columns': [{'name': 'id', 'type': 'TEXT'}, {'name': 'payload', 'type': 'TEXT'}, {'name': 'category', 'type': 'TEXT'}, {'name': 'detail', 'type': 'TEXT'}, {'name': 'created', 'type': 'DOUBLE PRECISION'}]}
+
 class SchemaMismatch(RuntimeError):
     pass
 
