@@ -1,3 +1,29 @@
+## Version 18 — démarrage résilient et pauses Telegram
+
+Le démarrage appelait `getMe` avant la gestion des erreurs de la boucle principale : une interruption réseau faisait sortir le programme et Railway redémarrait le conteneur. Cette version effectue `getMe` et `deleteWebhook` dans une initialisation avec reprise progressive (2, 4, 8, 16 puis 30 secondes entre tentatives). Elle attend aussi tout `retry_after` plus long renvoyé par Telegram. Elle ne crée les workers qu’après succès, conserve l’offset et ne supprime pas les mises à jour en attente.
+
+En cas d’interruption durable, le processus reste en attente et écrit **Démarrage en attente** avec la méthode, la catégorie de l’erreur et le délai suivant. Le bot ne répond pas encore tant que Telegram reste inaccessible. Le type de cause réseau (par exemple délai expiré ou connexion réinitialisée) est conservé sans afficher l’URL ni le token. Une authentification refusée produit un message explicite demandant de vérifier `BOT_TOKEN`, plutôt qu’une reprise réseau sans fin. L’arrêt SIGTERM interrompt l’attente et ferme la base.
+
+La campagne de remplacement du portail suspend désormais toute sa diffusion pendant un `429`, au lieu de reporter seulement un destinataire puis de continuer avec le suivant. Le délai est persistant ; les refus pour limitation ne consomment pas le budget des véritables erreurs. Les créations/modifications/révocations de liens en arrière-plan sont espacées d’au moins deux secondes par chat, sans retarder les simples boutons de navigation. État du réseau indique le délai restant. Un succès efface l’ancienne erreur de campagne.
+
+Installer **toute cette version**, notamment `app/main.py` et le nouveau `app/services/startup.py`, avec la base et les variables existantes, puis redéployer un seul replica. Aucun nouveau schéma. Ne pas recréer la base ni régénérer le token sur la seule base d’une erreur réseau.
+
+Les tests simulent les coupures au démarrage, la reprise complète de `main`, un délai Telegram de 65 secondes sans plafond erroné, l’authentification refusée, l’arrêt propre et la cadence des liens. Ils ne constituent pas un test de connectivité entre Railway et Telegram. Si cette connexion reste indisponible, la nouvelle version permet de diagnostiquer l’attente mais ne répare pas elle-même le réseau extérieur.
+
+---
+
+## Version 17 — remplacement par sélection du groupe
+
+Depuis la fiche de l’ancien portail : **Remplacer le groupe Telegram → choisir le nouveau groupe → Confirmer le remplacement**. Le bot affiche les groupes qu’il a détectés, sans rôle et désactivés. Ajouter le bot administrateur au nouveau supergroupe privé, ne pas lui attribuer de rôle dans l’admin, puis utiliser **Actualiser** dans la liste. Il n’est plus nécessaire de saisir l’identifiant négatif. Les anciens boutons « remplacer » ouvrent également cette liste après déploiement.
+
+La confirmation indique l’ancienne configuration et la nouvelle destination. Les droits du bot sont vérifiés avant toute mutation. La fiche provisoire sans rôle du nouveau groupe est retirée, et l’ancienne fiche conserve son identifiant logique, son rôle, ses textes et les accès. Pour un portail, la campagne de nouveaux liens et de notifications de la version 16 est préparée automatiquement. Le titre configuré de l’ancien portail est conservé.
+
+Un groupe déjà configuré n’est jamais écrasé. La destination et son rôle sont recontrôlés dans la transaction ; une sélection périmée ou un double clic ne déclenche pas une deuxième campagne. Les confirmations expirent après dix minutes. Une absence de droits ou une erreur Telegram produit un message explicite avec **Réessayer**, sans remplacement partiel.
+
+Déployer cette archive avec la base et les variables existantes, un seul replica, puis rouvrir **Administration → ancien portail → Remplacer le groupe Telegram**. Aucun nouveau schéma par rapport à la version 16. Les contrôles de la suite automatisée couvrent sélection, confirmation, droits, erreur réseau, cible déjà configurée, conservation des données et double clic. Les appels Telegram de ces tests sont simulés.
+
+---
+
 ## Version 16 — remplacement du portail, incidents et admissions
 
 ### Déployer avant de remplacer le portail
