@@ -34,6 +34,7 @@ class Callbacks:
                 self.db.run('UPDATE groups SET weekday=? WHERE id=?',(int(parts[2]),g['id']))
                 return self.show(uid,'a:'+g['id'])
             return
+        if self.replacement_callback(uid,data):return
         if self.trial_callback(uid,data):return
         if self.advertising_callback(uid,data): return
         if self.workflow_callback(uid,data): return
@@ -192,29 +193,7 @@ class Callbacks:
                     if not low<=value<=high: raise ValueError(f'Nombre entre {low} et {high}.')
                 elif field=='chat':
                     if uid not in self.owners: return
-                    value=int(value)
-                    candidate={**g,'chat':value}
-                    self.check_rights(candidate)
-                    registered=self.db.one('SELECT * FROM groups WHERE chat=?',(value,))
-                    if registered and (registered['enabled'] or registered['role']!='unset'):
-                        raise ValueError('Ce groupe appartient déjà à une configuration. Utilise un nouveau groupe.')
-                    with self.db.transaction():
-                        if registered: self.db.run('DELETE FROM groups WHERE id=?',(registered['id'],))
-                        pause=self.db.one('SELECT * FROM group_pauses WHERE chat=?',(g['chat'],))
-                        self.db.run('DELETE FROM group_pauses WHERE chat=?',(value,))
-                        if g['role']=='portal':self.prepare_portal_move(g,value)
-                        self.db.run('UPDATE groups SET chat=?,opened=0,enabled=? WHERE id=?',(value,pause['was_enabled'] if pause else g['enabled'],g['id']))
-                        self.db.set('portal_error:'+g['id'],'')
-                        self.db.set('locked:'+g['id'],'')
-                        self.db.run('DELETE FROM notices WHERE gid=?',(g['id'],))
-                        self.db.run('DELETE FROM media_tasks WHERE gid=?',(g['id'],))
-                        for link in self.db.all('SELECT url FROM links WHERE gid=? AND expires!=0',(g['id'],)):
-                            self.enqueue('revokeChatInviteLink',dict(chat_id=g['chat'],invite_link=link['url']))
-                        self.db.run('DELETE FROM links WHERE gid=?',(g['id'],))
-                        self.db.run('UPDATE members SET present=0 WHERE gid=?',(g['id'],))
-                    for a in self.db.all('SELECT * FROM access WHERE gid=? AND revoked=0',(g['id'],)):
-                        if active_access(a,time.time()):
-                            self.enqueue('sendMessage',dict(chat_id=a['uid'],text=self.tr(a['uid'],'Ton groupe a été remplacé. Ton accès est conservé.'),reply_markup=keyboard([button(self.tr(a['uid'],'🚪 Retrouver mon accès'),url=self.deep('g_'+g['id']))])))
+                    self.replace_group(uid,g,int(value))
                     value=str(value)
                 elif field=='title':
                     if not value or len(value)>100: raise ValueError('Nom affiché requis, maximum 100 caractères.')
@@ -225,7 +204,8 @@ class Callbacks:
                     if g['role']=='portal' and self.db.setting('portal_photo:'+g['id']) and len(value.encode('utf-16-le'))//2>800:
                         raise ValueError('Texte avec image : maximum 800 caractères.')
                 if field!='chat': self.db.run(f'UPDATE groups SET {field}=? WHERE id=?',(value,g['id']))
-            if g['role']=='portal' and g['enabled']: self.publish_portal(self.group(g['id']),force=True)
+            current=self.group(g['id'])
+            if current['role']=='portal' and current['enabled']:self.publish_portal(current,force=True)
             page='a:'+g['id']
         self.db.run('UPDATE users SET pending=NULL WHERE id=?',(uid,))
         self.show(uid,page)
