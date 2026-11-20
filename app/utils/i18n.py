@@ -22,3 +22,8 @@ CATALOG.update({
         'it':'Invita almeno una persona e attendi la convalida del suo invito prima di iniziare la visita.',
         'es':'Invita al menos a una persona y espera a que se valide su invitación antes de iniciar tu visita.'}
 })
+
+CATALOG['📢 Le portail a changé. Tes invitations validées et tes accès sont conservés. Tes nouveaux liens sont disponibles dans « Inviter mes amis ». Remplace les anciens liens dans tes partages.']={
+'en':'📢 The portal has changed. Your validated invitations and access are preserved. Find your new links under “Invite my friends” and replace the old links in your shared posts.',
+'it':'📢 Il portale è cambiato. Gli inviti convalidati e i tuoi accessi sono conservati. Trovi i nuovi link in “Invita i miei amici”: sostituisci quelli vecchi nei tuoi post.',
+'es':'📢 El portal ha cambiado. Conservas tus invitaciones validadas y tus accesos. Encontrarás los nuevos enlaces en “Invitar a mis amigos”. Sustituye los enlaces antiguos en tus publicaciones.'}
