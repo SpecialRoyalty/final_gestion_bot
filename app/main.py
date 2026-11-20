@@ -3,8 +3,10 @@ import os
 import time
 import threading
 import multiprocessing
+import signal
 from .db import DB, SchemaMismatch
 from .services.telegram import Telegram
+from .services.startup import startup_call, StartupStopped, StartupConfigurationError
 from .application import App
 from .services.runtime import Acknowledgements, persist_updates, start_workers, restore_actors
 
@@ -16,20 +18,26 @@ def main():
     try:db=DB(url)
     except SchemaMismatch as error:
         logging.error('%s',error);raise SystemExit(2) from None
-    api=Telegram(token,timeout=5,retries=1)
-    tz=os.getenv('TIMEZONE','Europe/Paris');support=os.getenv('SUPPORT_CONTACT','Administrateur')
-    app=App(db,api,owners,tz,support)
-    api.call('deleteWebhook',drop_pending_updates=False);app.install_command_menu()
-    allowed=['message','edited_message','callback_query','chat_member','my_chat_member','chat_join_request','pre_checkout_query']
-    stop=threading.Event();acks=Acknowledgements(Telegram(token,timeout=2,retries=1))
-    restore_actors(db)
-    workers=start_workers(url,token,owners,tz,support,app.me,stop)
-    from .services.media import run_worker
-    media_context=multiprocessing.get_context('spawn');media_stop=media_context.Event()
-    media=media_context.Process(target=run_worker,args=(url,token,media_stop),daemon=True);media.start();workers.append(media)
-    logging.info('Bot démarré : boutons, modération, arrivées/départs et tâches automatiques séparés.')
-    cleanup=0;poll_failures=0
+    stop=threading.Event();workers=[];acks=None;media_stop=None
+    previous_term=signal.signal(signal.SIGTERM,lambda *_:stop.set())
     try:
+        api=Telegram(token,timeout=5,retries=1)
+        tz=os.getenv('TIMEZONE','Europe/Paris');support=os.getenv('SUPPORT_CONTACT','Administrateur')
+        me=startup_call(api,db,stop,'getMe')
+        startup_call(api,db,stop,'deleteWebhook',drop_pending_updates=False)
+        app=App(db,api,owners,tz,support,me=me)
+        app.install_command_menu()
+        if stop.is_set():raise StartupStopped()
+        allowed=['message','edited_message','callback_query','chat_member','my_chat_member','chat_join_request','pre_checkout_query']
+        restore_actors(db)
+        acks=Acknowledgements(Telegram(token,timeout=2,retries=1))
+        workers=start_workers(url,token,owners,tz,support,app.me,stop)
+        from .services.media import run_worker
+        media_context=multiprocessing.get_context('spawn');media_stop=media_context.Event()
+        media=media_context.Process(target=run_worker,args=(url,token,media_stop),daemon=True);media.start();workers.append(media)
+        db.set('startup:phase','ready');db.set('startup:ready',time.time())
+        logging.info('Bot démarré : boutons, modération, arrivées/départs et tâches automatiques séparés.')
+        cleanup=0;poll_failures=0
         while not stop.is_set():
             try:
                 if any(not w.is_alive() for w in workers):raise RuntimeError('Worker arrêté : redémarrage du processus requis.')
@@ -44,11 +52,16 @@ def main():
             except RuntimeError:raise
             except Exception as error:
                 poll_failures+=1
-                app.record_failure('poll',error);stop.wait(min(30,2**min(poll_failures-1,5)))
-    except KeyboardInterrupt:pass
+                app.record_failure('poll',error);stop.wait(max(getattr(error,'retry',0),min(30,2**min(poll_failures-1,5))))
+    except (KeyboardInterrupt,StartupStopped):pass
+    except StartupConfigurationError as error:
+        logging.error('%s',error);raise SystemExit(2) from None
     finally:
-        stop.set();media_stop.set();acks.close()
+        stop.set()
+        if media_stop:media_stop.set()
+        if acks:acks.close()
         for worker in workers:worker.join(timeout=7)
         db.conn.close()
+        signal.signal(signal.SIGTERM,previous_term)
 
 if __name__=='__main__':main()
