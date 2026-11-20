@@ -91,6 +91,8 @@ class Scheduler:
             try:
                 payload=json.loads(job['payload'])
                 recipient=payload.get('chat_id',0)
+                if isinstance(recipient,int) and recipient<0 and self.db.one('SELECT 1 FROM group_pauses WHERE chat=?',(recipient,)):
+                    self.db.run('UPDATE jobs SET due=? WHERE id=?',(time.time()+300,job['id']));continue
                 if isinstance(recipient,int) and recipient>0 and self.db.setting('dm_blocked:'+str(recipient)):
                     self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],));continue
                 guard_gid=payload.pop('_unless_entitled',None)
@@ -103,6 +105,9 @@ class Scheduler:
                 self.record_success('job:'+job['method'])
                 self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],))
             except Exception as e:
+                from app.services.recovery import GroupUnavailable
+                if isinstance(e,GroupUnavailable):
+                    self.db.run('UPDATE jobs SET due=? WHERE id=?',(time.time()+300,job['id']));continue
                 if blocked_recipient(e) and isinstance(payload.get('chat_id'),int) and payload['chat_id']>0:
                     self.db.set('dm_blocked:'+str(payload['chat_id']),time.time())
                     self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],));continue
@@ -240,7 +245,7 @@ class Scheduler:
                 self.db.set('waiting:'+g['id'],(active[1] if active else now+60) if count is not None and count<g['threshold'] else 0)
                 if g['role']!='portal':
                     if should_open and not g['opened'] and g['role']=='chat':
-                        other=self.db.one("SELECT id FROM groups WHERE role='chat' AND opened=1 AND id!=?",(g['id'],))
+                        other=self.db.one("SELECT id FROM groups WHERE role='chat' AND enabled=1 AND opened=1 AND id!=?",(g['id'],))
                         if other: raise ValueError('Ouverture bloquée : la fermeture du groupe précédent doit être confirmée.')
                     if should_open and not g['opened']:
                         # Admin permissions are unaffected by setChatPermissions.
@@ -296,8 +301,7 @@ class Scheduler:
         for g in groups:
             try:
                 if g['role']=='portal':
-                    self.publish_portal(g)
-                    self.portal_promotions(g,now)
+                    if self.publish_portal(g):self.portal_promotions(g,now)
                 elif g['role'] in ('chat','always','free'):
                     if live and g['id']!=live['id']:
                         self.notice(g,'live','🔥 '+live['title']+' est ouvert !',

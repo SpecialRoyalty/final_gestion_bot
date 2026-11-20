@@ -10,6 +10,8 @@ class Context:
     def __init__(self, db, api, owners, tz='Europe/Paris', support='Administrateur', me=None):
         self.db, self.api, self.owners, self.tz, self.support = db, api, set(owners), tz, support
         self.me = me or api.call('getMe')
+        from app.services.recovery import GroupAwareAPI
+        self.api=GroupAwareAPI(api,self)
         self.last_tick = 0
         self._fresh_panels=set()
         self.initialize_member_workflows()
@@ -82,8 +84,9 @@ class Context:
     def alert(self, text):
         # Hourly deduplication, failed alerts are queued just like other operations.
         key = 'alert:' + text[:160]
-        if float(self.db.setting(key, '0')) > time.time()-3600: return
-        self.db.set(key, time.time())
+        now=time.time()
+        claimed=self.db.run('INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(settings.value AS DOUBLE PRECISION)<=?',(key,str(now),now-3600)).rowcount
+        if not claimed:return
         for uid in self.owners:
             self.enqueue('sendMessage', {'chat_id': uid, 'text': '⚠️ ' + text})
 
@@ -125,6 +128,7 @@ class Context:
             data.pop('text'); data.pop('link_preview_options')
             data['caption']=text
         old_menu=user['menu']
+        old_created=float(self.db.setting('menu_created:'+str(uid),'0'))
         fresh=uid in self._fresh_panels
         if old_menu and not fresh and bool(old_photo)==bool(photo):
             try:
@@ -142,7 +146,11 @@ class Context:
         result = self.api.call('sendPhoto',photo=photo,**data) if photo else self.api.call('sendMessage',**data)
         self.db.set('menu_photo:'+str(uid),photo or '')
         self.db.run('UPDATE users SET menu=? WHERE id=?', (result['message_id'], uid))
+        self.db.set('menu_created:'+str(uid),time.time())
         if old_menu and old_menu!=result['message_id']:
+            if old_created and time.time()-old_created>=48*3600:
+                self.enqueue('editMessageReplyMarkup',dict(chat_id=uid,message_id=old_menu,reply_markup={'inline_keyboard':[]}))
+                return
             try:
                 self.api.call('deleteMessage',chat_id=uid,message_id=old_menu)
             except Exception as error:

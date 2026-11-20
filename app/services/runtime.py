@@ -30,7 +30,7 @@ def lane_for(update):
         if m.get('new_chat_members') or m.get('left_chat_member'):return 'service'
         return 'moderation:'+str(abs(m['chat']['id'])%MODERATION_LANES)
     if 'pre_checkout_query' in update:return 'private:'+str(update['pre_checkout_query']['from']['id']%PRIVATE_LANES)
-    if 'chat_join_request' in update:return 'admission'
+    if 'chat_join_request' in update:return 'admission:'+str(update['chat_join_request']['from']['id']%2)
     event=update.get('chat_member') or update.get('my_chat_member') or update.get('chat_join_request') or {}
     return 'moderation:'+str(abs(event.get('chat',{}).get('id',0))%MODERATION_LANES)
 
@@ -39,6 +39,7 @@ def actor_for(update):
     if q:return 'user:'+str(q['from']['id'])
     m=update.get('message') or update.get('edited_message')
     if m:return ('user:'+str(m['from']['id'])) if m['chat']['type']=='private' else 'chat:'+str(m['chat']['id'])
+    if 'chat_join_request' in update:return 'join:'+str(update['chat_join_request']['chat']['id'])+':'+str(update['chat_join_request']['from']['id'])
     if 'pre_checkout_query' in update:return 'user:'+str(update['pre_checkout_query']['from']['id'])
     e=update.get('chat_member') or update.get('my_chat_member') or update.get('chat_join_request') or {}
     return 'chat:'+str(e.get('chat',{}).get('id',0))
@@ -46,7 +47,7 @@ def actor_for(update):
 def restore_actors(db):
     for row in db.all("SELECT id,payload FROM update_inbox WHERE state='ready'"):
         update=json.loads(row['payload'])
-        db.run('INSERT INTO update_actors(id,actor) VALUES (?,?) ON CONFLICT DO NOTHING',(row['id'],actor_for(update)))
+        db.run('INSERT INTO update_actors(id,actor) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET actor=excluded.actor',(row['id'],actor_for(update)))
         db.run('UPDATE update_inbox SET lane=? WHERE id=?',(lane_for(update),row['id']))
 
 def persist_updates(db,updates):
@@ -133,22 +134,25 @@ def run_background(url,token,owners,tz,support,me,stop,kind):
         db=DB(url,lock=False,initialize=False)
         app=App(db,Telegram(token,timeout=6,retries=1,background=True),owners,tz,support,me=me)
         app.external_jobs=True
+        if kind=='portal':db.run("UPDATE portal_recipients SET state='uncertain' WHERE state='sending'")
         while not stop.is_set():
             try:
-                app.jobs() if kind=='jobs' else app.tick()
+                if kind=='jobs':app.jobs()
+                elif kind=='portal':app.portal_move_step()
+                else:app.tick()
                 db.set('worker:'+kind+':ok',time.time())
             except Exception as error:
                 try:app.record_failure('worker:'+kind,error)
                 except Exception:logging.error('Worker %s: %s',kind,type(error).__name__)
-            stop.wait(.1 if kind=='jobs' else .5)
+            stop.wait(.1 if kind in ('jobs','portal') else .5)
     finally:
         if db:db.conn.close()
 
 def start_workers(url,token,owners,tz,support,me,stop):
     workers=[]
-    for lane in ['private:'+str(i) for i in range(PRIVATE_LANES)]+['moderation:'+str(i) for i in range(MODERATION_LANES)]+['service','admission','urgent:0','urgent:1']:
+    for lane in ['private:'+str(i) for i in range(PRIVATE_LANES)]+['moderation:'+str(i) for i in range(MODERATION_LANES)]+['service','admission:0','admission:1','urgent:0','urgent:1']:
         workers.append(threading.Thread(target=run_lane,args=(url,token,owners,tz,support,me,stop,lane),name=lane,daemon=True))
-    for kind in ('jobs','scheduler'):
+    for kind in ('jobs','scheduler','portal'):
         workers.append(threading.Thread(target=run_background,args=(url,token,owners,tz,support,me,stop,kind),name=kind,daemon=True))
     for worker in workers:worker.start()
     return workers

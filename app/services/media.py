@@ -6,7 +6,14 @@ import subprocess
 import tempfile
 import time
 import urllib.request
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
+import json
+import uuid
+import urllib.error
+from app.services.telegram import APIError, NetworkError, DeferredRequest
+from app.services.monitoring import safe_error
+
+class MediaTooLarge(ValueError):pass
 
 MAX_BYTES=20*1024*1024
 Image.MAX_IMAGE_PIXELS=25_000_000
@@ -58,14 +65,14 @@ class MediaEngine:
             hashes=[r['hash'] for r in self.db.all('SELECT hash FROM media_hashes WHERE file_id=?',(task['file_id'],))]
             if hashes:return self.matches(task,known['sha'],hashes)
         info=self.api.call('getFile',file_id=task['download_id'])
-        if info.get('file_size',0)>MAX_BYTES: raise ValueError('Média supérieur à 20 Mio : analyse avancée indisponible sur cette API.')
+        if info.get('file_size',0)>MAX_BYTES: raise MediaTooLarge('Fichier au-delà de la limite de téléchargement de cette API Telegram.')
         with tempfile.TemporaryDirectory(prefix='bot-media-') as tmp:
             source=Path(tmp)/'source'
             base=self.api.base.replace('/bot','/file/bot')
             request=urllib.request.Request(base+info['file_path'])
             with urllib.request.urlopen(request,timeout=30) as response:
                 data=response.read(MAX_BYTES+1)
-            if len(data)>MAX_BYTES: raise ValueError('Média trop volumineux.')
+            if len(data)>MAX_BYTES: raise MediaTooLarge('Fichier trop volumineux pour cette analyse.')
             sha=hashlib.sha256(data).hexdigest()
             source.write_bytes(data)
             del data
@@ -77,7 +84,7 @@ class MediaEngine:
                 if not math.isfinite(duration) or duration<=0: raise ValueError('Durée vidéo invalide.')
                 for i,fraction in enumerate((0.1,0.5,0.9)):
                     target=Path(tmp)/f'{i}.png'
-                    subprocess.run(['ffmpeg','-v','error','-threads','1','-ss',str(duration*fraction),'-i',str(source),'-frames:v','1','-vf','scale=128:128:force_original_aspect_ratio=decrease','-y',str(target)],capture_output=True,timeout=15,check=True)
+                    subprocess.run(['ffmpeg','-v','error','-threads','1','-filter_threads','1','-ss',str(duration*fraction),'-i',str(source),'-frames:v','1','-vf','scale=128:128:force_original_aspect_ratio=decrease','-y',str(target)],capture_output=True,timeout=15,check=True)
                     hashes.append(phash(target))
             delete=self.matches(task,sha,hashes)
             with self.db.transaction():self.add(task['file_id'],sha,hashes,task['gid'])
@@ -102,32 +109,72 @@ class MediaEngine:
         return delete
 
 
-def run_worker(url,token,stop):
-    # Independent DB connection: slow media decoding never blocks payment callbacks.
-    import json
-    import uuid
-    from app.db import DB
-    from .telegram import Telegram, DeferredRequest
-    db=DB(url,lock=False,initialize=False); api=Telegram(token,background=True); engine=MediaEngine(db,api)
-    while not stop.is_set():
-        db.set('media:heartbeat',time.time())
-        task=db.one('SELECT t.*,g.chat,g.anti FROM media_tasks t JOIN groups g ON t.gid=g.id WHERE t.due<=? ORDER BY t.due LIMIT 1',(time.time(),))
-        if not task:
-            stop.wait(2); continue
-        try:
-            if engine.analyze(task):
-                db.run('INSERT INTO jobs(id,method,payload,due) VALUES (?,?,?,?)',
-                       (uuid.uuid4().hex,'deleteMessage',json.dumps({'chat_id':task['chat'],'message_id':task['mid']}),time.time()))
-            db.run('DELETE FROM media_tasks WHERE id=?',(task['id'],))
-        except Exception as e:
-            # No raw error/URL persisted, since download URLs include the bot token.
-            if isinstance(e,DeferredRequest):
-                db.run('UPDATE media_tasks SET due=? WHERE id=?',(time.time()+e.retry,task['id']));continue
-            attempts=task['attempts']+1
-            if attempts>=5 or isinstance(e,ValueError):
-                db.run('INSERT INTO failed_actions(id,kind,detail,created) VALUES (?,?,?,?) ON CONFLICT DO NOTHING',(task['id'],'media',type(e).__name__+' : groupe '+task['gid'],time.time()))
+def media_error(error):
+    text=str(error).lower()
+    if isinstance(error,MediaTooLarge) or isinstance(error,APIError) and 'file is too big' in text:
+        return 'size','Fichier trop volumineux : analyse visuelle indisponible via cette API Telegram (limite 20 MB).'
+    if isinstance(error,subprocess.TimeoutExpired):return 'timeout','Décodage vidéo trop long ; analyse interrompue pour libérer le worker.'
+    if isinstance(error,(NetworkError,urllib.error.URLError,TimeoutError,ConnectionError)) or isinstance(error,APIError) and (error.code>=500 or error.code==429):
+        return 'network',safe_error(error)
+    if isinstance(error,(UnidentifiedImageError,Image.DecompressionBombError,subprocess.CalledProcessError,ValueError)):
+        return 'format','Fichier illisible, format non décodable ou dimensions/durée invalides ('+type(error).__name__+').'
+    return 'error',safe_error(error)
+
+
+def process_media_one(db,engine):
+    task=db.one('SELECT t.*,g.chat,g.anti FROM media_tasks t JOIN groups g ON t.gid=g.id WHERE t.due<=? AND g.enabled=1 ORDER BY t.due LIMIT 1',(time.time(),))
+    if not task:return False
+    try:
+        if engine.analyze(task):
+            db.run('INSERT INTO jobs(id,method,payload,due) VALUES (?,?,?,?)',
+                   (uuid.uuid4().hex,'deleteMessage',json.dumps({'chat_id':task['chat'],'message_id':task['mid']}),time.time()))
+        db.run('DELETE FROM media_tasks WHERE id=?',(task['id'],))
+        db.run('DELETE FROM media_failures WHERE id=?',(task['id'],))
+        db.run('DELETE FROM failed_actions WHERE id=?',(task['id'],))
+    except Exception as error:
+        if isinstance(error,DeferredRequest) or isinstance(error,APIError) and error.code==429:
+            db.run('UPDATE media_tasks SET due=? WHERE id=?',(time.time()+max(1,error.retry),task['id']));return True
+        category,detail=media_error(error);attempts=task['attempts']+1
+        transient=category in ('network','timeout')
+        if transient and attempts<5:
+            db.run('UPDATE media_tasks SET attempts=?,due=? WHERE id=?',(attempts,time.time()+min(1800,15*2**attempts),task['id']))
+        else:
+            detail='Groupe '+task['gid']+' · message '+str(task['mid'])+' · '+detail
+            with db.transaction():
+                db.run('INSERT INTO media_failures(id,payload,category,detail,created) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,category=excluded.category,detail=excluded.detail,created=excluded.created',
+                       (task['id'],json.dumps(task),category,detail,time.time()))
+                db.run('INSERT INTO failed_actions(id,kind,detail,created) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET detail=excluded.detail,created=excluded.created',
+                       (task['id'],'media:'+category,detail,time.time()))
                 db.run('DELETE FROM media_tasks WHERE id=?',(task['id'],))
-                db.set('media_warning','Analyses médias arrêtées après échec. Consulter l’état du réseau.');continue
-            db.run('UPDATE media_tasks SET attempts=?,due=? WHERE id=?',(attempts,time.time()+min(86400,60*2**min(attempts,10)),task['id']))
-            if attempts==3:db.set('media_warning','Analyses médias retardées : des reprises sont en cours. Consulter l’état du réseau.')
-    db.conn.close()
+            # Expected API/file limitations stay in health, not hourly alarm floods.
+            if category in ('network','timeout','error'):
+                stamp=float(db.setting('media:alert_at:'+category,'0'))
+                if time.time()-stamp>86400:
+                    db.set('media:alert_at:'+category,time.time())
+                    db.set('media_warning','Analyses médias à examiner : '+category+'. Les autres médias continuent ; détails et reprise dans État du réseau.')
+    return True
+
+
+def retry_media_failures(db,limit=20):
+    count=0
+    for row in db.all("SELECT * FROM media_failures WHERE category IN ('network','timeout') ORDER BY created LIMIT ?",(limit,)):
+        task=json.loads(row['payload']);g=db.one('SELECT * FROM groups WHERE id=?',(task['gid'],))
+        if not g or not g['enabled'] or g['chat']!=task['chat']:continue
+        with db.transaction():
+            db.run('INSERT INTO media_tasks(id,gid,mid,file_id,download_id,kind,due) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING',
+                   (task['id'],task['gid'],task['mid'],task['file_id'],task['download_id'],task['kind'],time.time()))
+            db.run('DELETE FROM media_failures WHERE id=?',(row['id'],))
+            db.run('DELETE FROM failed_actions WHERE id=?',(row['id'],))
+        count+=1
+    return count
+
+
+def run_worker(url,token,stop):
+    from app.db import DB
+    from .telegram import Telegram
+    db=DB(url,lock=False,initialize=False);engine=MediaEngine(db,Telegram(token,background=True))
+    try:
+        while not stop.is_set():
+            db.set('media:heartbeat',time.time())
+            if not process_media_one(db,engine):stop.wait(.5)
+    finally:db.conn.close()

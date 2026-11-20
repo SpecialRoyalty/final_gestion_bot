@@ -15,7 +15,7 @@ class TrafficGate:
             if background:retry=max(retry,self.network_until-now)
             self.tokens=min(3.,self.tokens+(now-self.last)*3);self.last=now
             if retry>0:return max(1,math.ceil(retry))
-            if self.active>=8 or (background and (self.background>=1 or self.tokens<1)):return 1
+            if self.active>=8 or (background and (self.background>=1 or self.tokens<1)):return .1
             self.active+=1
             if background:self.background+=1;self.tokens-=1
             return 0

@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from app.keyboards.inline import button
 from app.services.payments import money
 from app.services.telegram import transient_error, DeferredRequest
+from app.services.recovery import GroupUnavailable
 
 
 def safe_error(error):
@@ -29,7 +30,7 @@ class Monitoring:
         self.db.set(key+':failure_count',0)
 
     def record_failure(self,key,error):
-        if isinstance(error,DeferredRequest):return
+        if isinstance(error,(DeferredRequest,GroupUnavailable)):return
         message=safe_error(error);now=time.time()
         last=float(self.db.setting(key+':error_at','0'))
         count=int(self.db.setting(key+':failure_count','0'))+1 if now-last<300 else 1
@@ -48,12 +49,24 @@ class Monitoring:
         return datetime.fromtimestamp(float(stamp),ZoneInfo(self.tz)).strftime('%d/%m %H:%M:%S') if stamp else 'jamais'
 
     def monitoring_callback(self,uid,data):
-        if not (data=='health' or data=='healthrun' or data.startswith(('health:','stats:'))): return False
+        if not (data=='health' or data in ('healthrun','healthmediaretry','healthportalretry','healthportalfailed','healthportaluncertain') or data.startswith(('health:','stats:'))): return False
         if uid not in self.owners: return True
         if data.startswith('stats:'):
             try: days=int(data.split(':')[1]); page=int(data.split(':')[2]) if data.count(':')>1 else 0
             except ValueError: return True
             if days in (1,7,30): self.show_stats(uid,days,max(page,0))
+        elif data=='healthportalretry':
+            self.screen(uid,'Relancer les notifications du dernier remplacement ? Une livraison non confirmée peut déjà avoir été reçue : sa relance peut produire un doublon.',[[button('Relancer uniquement les échecs confirmés','healthportalfailed')],[button('Relancer aussi les livraisons non confirmées','healthportaluncertain')],[button('⬅️ Retour','health')]])
+        elif data in ('healthportalfailed','healthportaluncertain'):
+            move=self.db.one('SELECT id FROM portal_moves ORDER BY created DESC LIMIT 1')
+            if move:
+                states="('failed','uncertain')" if data=='healthportaluncertain' else "('failed')"
+                self.db.run("UPDATE portal_recipients SET state='ready',attempts=0,due=0 WHERE move_id=? AND state IN "+states,(move['id'],))
+            self.show_health(uid)
+        elif data=='healthmediaretry':
+            from app.services.media import retry_media_failures
+            retry_media_failures(self.db)
+            self.show_health(uid)
         elif data=='healthrun':
             groups=self.db.all('SELECT id FROM groups WHERE enabled=1 ORDER BY id')
             if not self.db.setting('diagnostics:queue') or self.db.setting('diagnostics:queue')=='[]':
@@ -113,10 +126,21 @@ class Monitoring:
         lines.append(f'Événements en attente : {pending} · échecs à examiner : {failed_updates}')
         failed=self.db.one('SELECT COUNT(*) AS n FROM failed_actions')['n']
         lines.append(f'Actions arrêtées, à examiner : {failed}')
-        for item in self.db.all('SELECT kind,detail FROM failed_actions ORDER BY created DESC LIMIT 3'):
-            lines.append('⚠️ '+html.escape(item['kind']+' : '+item['detail']))
+        labels={'panel_cleanup':'Anciens panneaux non supprimables','media:size':'Médias trop volumineux','media:format':'Médias non décodables','media:network':'Médias arrêtés après incidents réseau','media:timeout':'Médias trop longs à décoder','media:error':'Erreurs médias à examiner','media':'Anciens échecs médias (cause détaillée non enregistrée)'}
+        for item in self.db.all('SELECT kind,COUNT(*) AS n FROM failed_actions GROUP BY kind ORDER BY kind LIMIT 12'):
+            lines.append('• '+html.escape(labels.get(item['kind'],item['kind']))+' : '+str(item['n']))
+        lines.append('Ces compteurs incluent l’historique ; ils ne signifient pas que les tâches tournent encore.')
+        for item in self.db.all('SELECT category,detail FROM media_failures ORDER BY created DESC LIMIT 2'):
+            lines.append('⚠️ Média · '+html.escape(item['detail']))
+        for item in self.db.all('SELECT p.reason,g.title FROM group_pauses p JOIN groups g ON g.chat=p.chat'):
+            lines.append('⏸ '+html.escape(item['title']+' : '+item['reason']))
+        move=self.db.one('SELECT id FROM portal_moves ORDER BY created DESC LIMIT 1')
+        if move:
+            labels={'ready':'en attente','sent':'envoyées','unreachable':'non joignables','uncertain':'résultat non confirmé','failed':'en échec','sending':'en cours','superseded':'remplacées'}
+            counts=self.db.all('SELECT state,COUNT(*) AS n FROM portal_recipients WHERE move_id=? GROUP BY state',(move['id'],))
+            lines.append('Notifications du portail : '+', '.join(str(r['n'])+' '+labels.get(r['state'],r['state']) for r in counts))
         lines.append('Accusés boutons en échec (sans bloquer l’action) : '+self.db.setting('callback_ack:errors','0'))
-        for lane in ('private:0','private:1','private:2','private:3','service','admission','urgent:0','urgent:1'):
+        for lane in ('private:0','private:1','private:2','private:3','service','admission:0','admission:1','urgent:0','urgent:1'):
             duration=self.db.setting('latency:'+lane+':ms')
             if duration:lines.append(lane+' : dernier traitement '+duration+' ms · attente avant traitement '+self.db.setting('latency:'+lane+':queue_ms','0')+' ms')
         incidents=self.db.all('SELECT key,value FROM settings WHERE key LIKE ? AND value!=? ORDER BY key',('%:error',''))
@@ -163,10 +187,15 @@ class Monitoring:
                 lines.append('Contrôles Telegram du '+self.time_label(report['at']))
                 lines.extend(html.escape(x) for x in report['checks'] if x!='Historique des membres incomplet si le bot était absent.')
             else: lines.append('Contrôles Telegram détaillés : pas encore exécutés.')
-        rows=[[button('⚙️ Compléter la configuration','configuration')],[button('🔎 Vérifier les groupes','healthrun')],[button('🔄 Actualiser','health:'+str(page))]]
+        rows=[[button('📢 Notifications du portail : relancer','healthportalretry')],[button('🔁 Réessayer les médias temporaires (20 max)','healthmediaretry')],[button('⚙️ Compléter la configuration','configuration')],[button('🔎 Vérifier les groupes','healthrun')],[button('🔄 Actualiser','health:'+str(page))]]
         if pages>1: rows.append([button('◀️','health:'+str(max(0,page-1))),button(f'{page+1}/{pages} ▶️','health:'+str(min(pages-1,page+1)))])
         rows.append([button('⬅️ Administration','admin')])
-        self.screen(uid,'\n'.join(lines),rows)
+        visible=[]
+        for line in lines:
+            if sum(len(x)+1 for x in visible)+len(line)>3750:
+                visible.append('… Affichage abrégé. Utilise les pages des groupes.');break
+            visible.append(line)
+        self.screen(uid,'\n'.join(visible),rows)
 
     def show_stats(self,uid,days=7,page=0):
         now=time.time(); since=now-days*86400
