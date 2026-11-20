@@ -112,6 +112,7 @@ class Callbacks:
                             return self.screen(uid,'Complète le rôle, et pour un VIP la description et le prix.',[[button('⬅️ Retour','a:'+g['id'])]])
                         try:
                             self.check_rights(g)
+                            self.clear_group_pause(g)
                         except (ValueError,APIError) as error:
                             return self.screen(uid,'⚠️ Activation impossible : '+html.escape(str(error)),[[button('⬅️ Retour','a:'+g['id'])]])
                     else:
@@ -199,8 +200,14 @@ class Callbacks:
                         raise ValueError('Ce groupe appartient déjà à une configuration. Utilise un nouveau groupe.')
                     with self.db.transaction():
                         if registered: self.db.run('DELETE FROM groups WHERE id=?',(registered['id'],))
-                        self.db.run('UPDATE groups SET chat=?,opened=0 WHERE id=?',(value,g['id']))
+                        pause=self.db.one('SELECT * FROM group_pauses WHERE chat=?',(g['chat'],))
+                        self.db.run('DELETE FROM group_pauses WHERE chat=?',(value,))
+                        if g['role']=='portal':self.prepare_portal_move(g,value)
+                        self.db.run('UPDATE groups SET chat=?,opened=0,enabled=? WHERE id=?',(value,pause['was_enabled'] if pause else g['enabled'],g['id']))
+                        self.db.set('portal_error:'+g['id'],'')
+                        self.db.set('locked:'+g['id'],'')
                         self.db.run('DELETE FROM notices WHERE gid=?',(g['id'],))
+                        self.db.run('DELETE FROM media_tasks WHERE gid=?',(g['id'],))
                         for link in self.db.all('SELECT url FROM links WHERE gid=? AND expires!=0',(g['id'],)):
                             self.enqueue('revokeChatInviteLink',dict(chat_id=g['chat'],invite_link=link['url']))
                         self.db.run('DELETE FROM links WHERE gid=?',(g['id'],))

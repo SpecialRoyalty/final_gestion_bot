@@ -101,6 +101,8 @@ class Screens:
             rows=group_controls(g,uid in self.owners)
             text=f'<b>⚙️ {html.escape(g["title"])}</b>\nType : {ROLE_LABELS.get(g["role"],g["role"])}\nIdentifiant : {g["chat"]}'
             text+='\nÉtat : '+('🟢 Activé' if g['enabled'] else '⚪ Désactivé')
+            pause=self.db.one('SELECT reason FROM group_pauses WHERE chat=?',(g['chat'],))
+            if pause:text+='\n⏸ '+html.escape(pause['reason'])+' Réactive après rétablissement des droits ou remplace le groupe.'
             if g['role']=='portal':
                 published=self.db.one("SELECT mid FROM notices WHERE gid=? AND kind='portal'",(g['id'],))
                 text+='\nMessage : '+('publié' if published else 'pas encore publié')

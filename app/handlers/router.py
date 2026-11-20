@@ -17,7 +17,8 @@ class Router:
                 self.db.run('INSERT INTO groups(id,chat,title) VALUES (?,?,?) ON CONFLICT(chat) DO NOTHING',
                             (uuid.uuid4().hex[:12],chat['id'],chat.get('title','Groupe')))
                 self.alert('Groupe à configurer : '+chat.get('title','Groupe'))
-            else: self.alert('Bot retiré ou permissions modifiées : '+chat.get('title','Groupe'))
+            elif q['new_chat_member']['status'] in ('left','kicked','member','restricted'):
+                self.suspend_group(chat['id'],'Bot absent ou droits administrateur retirés.')
             return
         m=u.get('message') or u.get('edited_message')
         if not m: return
