@@ -95,10 +95,22 @@ class Scheduler:
                     self.db.run('UPDATE jobs SET due=? WHERE id=?',(time.time()+300,job['id']));continue
                 if isinstance(recipient,int) and recipient>0 and self.db.setting('dm_blocked:'+str(recipient)):
                     self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],));continue
+                if '_activity' in payload:
+                    self.perform_activity_job(job,payload)
+                    continue
                 guard_gid=payload.pop('_unless_entitled',None)
+                if guard_gid and job['method']=='banChatMember':
+                    a=self.access(payload['user_id'],guard_gid)
+                    if a and a['revoked'] and (a['expires'] is None or a['expires']>time.time()):
+                        # Legacy inactivity jobs have no evidence of writable time.
+                        self.queue_rehabilitation(payload['user_id'],guard_gid)
+                        self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],));continue
+                admission_gid=payload.pop('_admission',None)
                 guard_ban=payload.pop('_if_banned',False)
                 guard_unban=payload.pop('_unless_banned',False)
-                skip=(guard_gid and self.entitled(payload['user_id'],self.group(guard_gid)))
+                access_gid=guard_gid or admission_gid
+                guarded_group=self.group(access_gid) if access_gid else None
+                skip=bool(access_gid and (not guarded_group or self.entitled(payload['user_id'],guarded_group) or guarded_group['chat']!=recipient))
                 if guard_ban: skip=not self.user(payload['user_id'])['banned']
                 if guard_unban: skip=bool(self.user(payload['user_id'])['banned'])
                 if not skip: self.api.call(job['method'],**payload)
@@ -121,6 +133,13 @@ class Scheduler:
                     self.db.run('UPDATE jobs SET due=? WHERE id=?',(time.time()+e.retry,job['id']));continue
                 if isinstance(e,APIError) and e.code in (400,403):
                     self.failed_action(job['method'],e,job['id'])
+                    self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],))
+                    self.record_failure('job:'+job['method'],e);continue
+                if isinstance(e,APIError) and e.code==429:
+                    self.db.run('UPDATE jobs SET due=? WHERE id=?',(time.time()+max(1,e.retry),job['id']));continue
+                if job['method'] in ('sendMessage','sendPhoto') and isinstance(e,APIError) and (e.code==0 or e.code>=500):
+                    # A lost response may follow successful delivery. Never blindly duplicate it.
+                    self.failed_action('delivery_uncertain',e,job['id'])
                     self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],))
                     self.record_failure('job:'+job['method'],e);continue
                 attempts=job['attempts']+1
@@ -194,12 +213,22 @@ class Scheduler:
                                 qualifies=True; break
                         if not qualifies: continue
                     with self.db.transaction():
+                        self.lock_inviter(r['inviter'])
+                        current=self.db.one('SELECT valid FROM referrals WHERE invitee=?',(r['invitee'],))
+                        if not current or current['valid']:continue
+                        self.assign_invitation(r)
                         self.db.run('UPDATE referrals SET valid=1 WHERE invitee=?',(r['invitee'],))
                         target=self.db.one('SELECT gid FROM referral_targets WHERE invitee=?',(r['invitee'],))
                         self.metric('referral_valid',r['inviter'],target['gid'] if target else portal['id'],key='valid:'+str(r['invitee']))
                 except Exception as error:
                     errors.append(error)
                     if isinstance(error,APIError) and (error.code==429 or error.code>=500 or error.code==0):break
+        cursor=int(self.db.setting('reserve:cursor','0'))
+        reserves=self.db.all('SELECT DISTINCT uid FROM referral_reserves WHERE uid>? ORDER BY uid LIMIT 10',(cursor,))
+        if not reserves:reserves=self.db.all('SELECT DISTINCT uid FROM referral_reserves ORDER BY uid LIMIT 10')
+        for reserve in reserves:
+            self.allocate_reserve(reserve['uid'])
+            self.db.set('reserve:cursor',reserve['uid'])
         if errors:raise errors[0]
 
     def task_expiry(self,now):
@@ -310,19 +339,6 @@ class Scheduler:
                 self.record_success('announce:'+g['id'])
             except Exception as error:
                 self.record_failure('announce:'+g['id'],error)
-
-    def task_activity(self,now):
-        for m in self.db.all("SELECT m.* FROM members m JOIN groups g ON m.gid=g.id WHERE m.present=1 AND g.enabled=1 AND g.role IN ('chat','always') AND m.media<=?",(now-3*86400,)):
-            g=self.group(m['gid'])
-            if self.admin(m['uid'],g): continue
-            if m['media']<=now-4*86400:
-                with self.db.transaction():
-                    self.enqueue('banChatMember',dict(chat_id=g['chat'],user_id=m['uid'],_unless_entitled=g['id']))
-                    self.db.run('UPDATE members SET present=0 WHERE uid=? AND gid=?',(m['uid'],g['id']))
-                    self.db.run('UPDATE access SET revoked=1,base=? WHERE uid=? AND gid=?',(self.count(m['uid'],g['id']),m['uid'],g['id']))
-            elif not m['warned']:
-                self.enqueue('sendMessage',dict(chat_id=m['uid'],text=self.tr(m['uid'],'⚠️ Partage un média dans ')+g['title']+self.tr(m['uid'],' avant demain pour conserver ton accès.')))
-                self.db.run('UPDATE members SET warned=1 WHERE uid=? AND gid=?',(m['uid'],g['id']))
 
     def task_ads(self,now):
         # A portal can advertise all day without being a chat session.

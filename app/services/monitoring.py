@@ -141,6 +141,10 @@ class Monitoring:
             labels={'ready':'en attente','sent':'envoyées','unreachable':'non joignables','uncertain':'résultat non confirmé','failed':'en échec','sending':'en cours','superseded':'remplacées'}
             counts=self.db.all('SELECT state,COUNT(*) AS n FROM portal_recipients WHERE move_id=? GROUP BY state',(move['id'],))
             lines.append('Notifications du portail : '+', '.join(str(r['n'])+' '+labels.get(r['state'],r['state']) for r in counts))
+        review=self.db.one("SELECT COUNT(*) AS n FROM rehabilitation WHERE state='review'")['n']
+        lines.append(f'Réhabilitations à vérifier : {review}')
+        states=self.db.all('SELECT state,COUNT(*) AS n FROM feature_notifications GROUP BY state')
+        lines.append('Annonce invitations : '+', '.join(str(r['n'])+' '+r['state'] for r in states))
         lines.append('Accusés boutons en échec (sans bloquer l’action) : '+self.db.setting('callback_ack:errors','0'))
         for lane in ('private:0','private:1','private:2','private:3','service','admission:0','admission:1','urgent:0','urgent:1'):
             duration=self.db.setting('latency:'+lane+':ms')
@@ -189,7 +193,7 @@ class Monitoring:
                 lines.append('Contrôles Telegram du '+self.time_label(report['at']))
                 lines.extend(html.escape(x) for x in report['checks'] if x!='Historique des membres incomplet si le bot était absent.')
             else: lines.append('Contrôles Telegram détaillés : pas encore exécutés.')
-        rows=[[button('📢 Notifications du portail : relancer','healthportalretry')],[button('🔁 Réessayer les médias temporaires (20 max)','healthmediaretry')],[button('⚙️ Compléter la configuration','configuration')],[button('🔎 Vérifier les groupes','healthrun')],[button('🔄 Actualiser','health:'+str(page))]]
+        rows=[[button('🛟 Réhabilitations locker','rehab')],[button('📢 Notifications du portail : relancer','healthportalretry')],[button('🔁 Réessayer les médias temporaires (20 max)','healthmediaretry')],[button('⚙️ Compléter la configuration','configuration')],[button('🔎 Vérifier les groupes','healthrun')],[button('🔄 Actualiser','health:'+str(page))]]
         if pages>1: rows.append([button('◀️','health:'+str(max(0,page-1))),button(f'{page+1}/{pages} ▶️','health:'+str(min(pages-1,page+1)))])
         rows.append([button('⬅️ Administration','admin')])
         visible=[]

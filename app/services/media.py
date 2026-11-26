@@ -1,4 +1,5 @@
 """Bounded media analysis. Only hashes persist; downloaded bytes live in a temporary directory."""
+import os
 import hashlib
 import math
 from pathlib import Path
@@ -41,7 +42,35 @@ def bands(value):
 
 
 class MediaEngine:
-    def __init__(self,db,api): self.db,self.api=db,api
+    def __init__(self,db,api):
+        self.db,self.api=db,api
+        custom=bool(getattr(api,'custom_endpoint',False))
+        self.max_bytes=min(2000,max(1,int(os.environ.get('MAX_MEDIA_MB','200'))))*1024*1024 if custom else MAX_BYTES
+
+    def download(self,info,source):
+        if info.get('file_size',0)>self.max_bytes:raise MediaTooLarge('Taille supérieure à la limite configurée.')
+        file_path=info['file_path']
+        if Path(file_path).is_absolute():
+            root=os.environ.get('TELEGRAM_LOCAL_FILES_ROOT','')
+            if not getattr(self.api,'custom_endpoint',False) or not root:
+                raise ValueError('Configurer le volume partagé TELEGRAM_LOCAL_FILES_ROOT pour les fichiers du serveur local.')
+            path=Path(file_path).resolve();allowed=Path(root).resolve()
+            if not path.is_relative_to(allowed) or not path.is_file():raise ValueError('Fichier hors du volume Telegram autorisé.')
+            stream=path.open('rb')
+        else:
+            if '..' in Path(file_path).parts or '://' in file_path:raise ValueError('Chemin Telegram invalide.')
+            base=self.api.base.replace('/bot','/file/bot')
+            stream=urllib.request.urlopen(urllib.request.Request(base+file_path),timeout=30)
+        size=0;digest=hashlib.sha256();deadline=time.monotonic()+120
+        with stream,source.open('wb') as output:
+            while True:
+                if time.monotonic()>deadline:raise TimeoutError('Téléchargement média trop long.')
+                chunk=stream.read(min(1024*1024,self.max_bytes-size+1))
+                if not chunk:break
+                size+=len(chunk)
+                if size>self.max_bytes:raise MediaTooLarge('Taille supérieure à la limite configurée.')
+                output.write(chunk);digest.update(chunk)
+        return digest.hexdigest()
 
     def candidates(self,value):
         result=set()
@@ -65,17 +94,9 @@ class MediaEngine:
             hashes=[r['hash'] for r in self.db.all('SELECT hash FROM media_hashes WHERE file_id=?',(task['file_id'],))]
             if hashes:return self.matches(task,known['sha'],hashes)
         info=self.api.call('getFile',file_id=task['download_id'])
-        if info.get('file_size',0)>MAX_BYTES: raise MediaTooLarge('Fichier au-delà de la limite de téléchargement de cette API Telegram.')
         with tempfile.TemporaryDirectory(prefix='bot-media-') as tmp:
             source=Path(tmp)/'source'
-            base=self.api.base.replace('/bot','/file/bot')
-            request=urllib.request.Request(base+info['file_path'])
-            with urllib.request.urlopen(request,timeout=30) as response:
-                data=response.read(MAX_BYTES+1)
-            if len(data)>MAX_BYTES: raise MediaTooLarge('Fichier trop volumineux pour cette analyse.')
-            sha=hashlib.sha256(data).hexdigest()
-            source.write_bytes(data)
-            del data
+            sha=self.download(info,source)
             hashes=[]
             if task['kind']=='photo': hashes=[phash(source)]
             else:
@@ -112,7 +133,7 @@ class MediaEngine:
 def media_error(error):
     text=str(error).lower()
     if isinstance(error,MediaTooLarge) or isinstance(error,APIError) and 'file is too big' in text:
-        return 'size','Fichier trop volumineux : analyse visuelle indisponible via cette API Telegram (limite 20 MB).'
+        return 'size','Fichier trop volumineux : API hébergée limitée à 20 MB ; avec un serveur local, vérifier MAX_MEDIA_MB. Les autres fichiers continuent à être analysés.'
     if isinstance(error,subprocess.TimeoutExpired):return 'timeout','Décodage vidéo trop long ; analyse interrompue pour libérer le worker.'
     if isinstance(error,(NetworkError,urllib.error.URLError,TimeoutError,ConnectionError)) or isinstance(error,APIError) and (error.code>=500 or error.code==429):
         return 'network',safe_error(error)
@@ -157,7 +178,9 @@ def process_media_one(db,engine):
 
 def retry_media_failures(db,limit=20):
     count=0
-    for row in db.all("SELECT * FROM media_failures WHERE category IN ('network','timeout') ORDER BY created LIMIT ?",(limit,)):
+    custom=os.environ.get('TELEGRAM_API_URL','https://api.telegram.org').rstrip('/')!='https://api.telegram.org'
+    categories="('network','timeout','size')" if custom else "('network','timeout')"
+    for row in db.all('SELECT * FROM media_failures WHERE category IN '+categories+' ORDER BY created LIMIT ?',(limit,)):
         task=json.loads(row['payload']);g=db.one('SELECT * FROM groups WHERE id=?',(task['gid'],))
         if not g or not g['enabled'] or g['chat']!=task['chat']:continue
         with db.transaction():

@@ -188,6 +188,7 @@ class Context:
                     'ON CONFLICT(uid,gid) DO UPDATE SET source=excluded.source,expires=excluded.expires,revoked=0',
                     (uid,g['id'],source,expires))
         if not active_access(previous,time.time()) or previous['expires']!=expires:
+            self.db.run('DELETE FROM activity_clocks WHERE uid=? AND gid=?',(uid,g['id']))
             self.metric('grant',uid,g['id'])
 
     def link(self, uid, g, purpose='access'):

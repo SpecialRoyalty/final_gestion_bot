@@ -64,7 +64,7 @@ class Moderation:
                         (uid,g['id'],time.time(),time.time()))
             if q['new_chat_member']['status'] in ('administrator','creator'): return
             if not self.entitled(uid,g):
-                self.enqueue('banChatMember',dict(chat_id=g['chat'],user_id=uid)); return
+                self.enqueue('banChatMember',dict(chat_id=g['chat'],user_id=uid,_admission=g['id'])); return
             if g['role']=='portal':
                 link=self.db.one('SELECT * FROM links WHERE url=? AND purpose=?',
                                  (q.get('invite_link',{}).get('invite_link',''),'referral'))

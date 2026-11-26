@@ -134,11 +134,15 @@ def run_background(url,token,owners,tz,support,me,stop,kind):
         db=DB(url,lock=False,initialize=False)
         app=App(db,Telegram(token,timeout=6,retries=1,background=True),owners,tz,support,me=me)
         app.external_jobs=True
-        if kind=='portal':db.run("UPDATE portal_recipients SET state='uncertain' WHERE state='sending'")
+        if kind=='portal':
+            db.run("UPDATE portal_recipients SET state='uncertain' WHERE state='sending'")
+            db.run("UPDATE feature_notifications SET state='uncertain' WHERE state='sending'")
         while not stop.is_set():
             try:
                 if kind=='jobs':app.jobs()
-                elif kind=='portal':app.portal_move_step()
+                elif kind=='portal':
+                    app.feature_notification_step()
+                    app.portal_move_step()
                 else:app.tick()
                 db.set('worker:'+kind+':ok',time.time())
             except Exception as error:
