@@ -1,3 +1,67 @@
+## Version 19 — invitations en surplus, locker et réactivité
+
+Remplacer **toute l’application**, conserver la base et les variables existantes, puis redéployer **un seul replica**. La migration `008_fair_access.sql` est embarquée dans Python et s’applique automatiquement. Les sept migrations déjà livrées restent identiques. Cette archive n’a pas été déployée sur Railway depuis cet environnement.
+
+### Invitations
+
+- Chaque groupe classique ou 24 h/24 conserve son lien personnel vers le portail.
+- À la validation d’une nouvelle invitation : objectif du lien en priorité s’il est encore incomplet, puis objectif actif auquel il manque le moins d’invitations. Les égalités sont départagées par identifiant de groupe pour garder un résultat stable.
+- Une invitation n’est attribuée qu’à **un seul** objectif. Les accès déjà actifs, notamment payés, sont ignorés. Les groupes VIP, preuve et gratuits ne sont pas transformés en objectifs gratuits.
+- Si tous les objectifs sont complets, l’invitation est conservée en réserve. La réserve est affichée dans **Inviter mes amis** et répartie lors des passages automatiques ou de la navigation lorsqu’un objectif devient disponible.
+- Les invitations déjà validées avant cette version ne sont pas déplacées rétroactivement. Leurs compteurs et les accès acquis restent inchangés. Les récompenses de signalement de bug restent affectées au groupe choisi.
+- L’attribution est transactionnelle, avec verrou par invitant sur PostgreSQL. Rejouer une validation ne recompte pas l’invitation. Le groupe d’origine du lien est conservé séparément.
+
+### Inactivité et réhabilitation
+
+L’ancien contrôle utilisait l’âge du dernier média, même si les membres ne pouvaient pas publier. Le nouveau compteur cumule seulement le temps observé où le groupe est activé, ouvert et dispose d’une liste d’administrateurs récente. Fermetures, locker, suspension du groupe et longues interruptions de suivi ne sont pas facturés aux membres. Les admins sont exemptés.
+
+La règle devient explicite : avertissement après **72 heures d’ouverture effective** sans média, exclusion après **96 heures d’ouverture effective**. Un nouveau média, une nouvelle entrée ou un accès nouvellement accordé réinitialise le suivi. Le compteur commence à zéro lors du déploiement, faute d’historique fiable. Les anciens avertissements encore en file sont retirés. Cette durée est du temps d’ouverture cumulé, pas quatre jours de calendrier.
+
+Avant d’exécuter une exclusion en attente, le bot revérifie le groupe, le média, l’entrée, le compteur et les admins. L’accès n’est révoqué qu’après confirmation de l’appel Telegram. Les nouvelles exclusions pour inactivité sont consignées dans l’audit. Un ancien bannissement d’admission est désormais annulé si l’accès a été accordé entre-temps.
+
+**Administration → État du réseau → Réhabilitations locker** présente les anciens cas possibles : accès révoqué mais non expiré, membre absent, groupe avec locker, sans bannissement global. Le code précédent ne mémorisait pas le motif précis ni les périodes d’ouverture accessibles à chaque membre : **il ne permet pas de réhabiliter automatiquement et avec certitude toutes les anciennes victimes**. L’admin confirme les cas réellement concernés. Cette liste n’est donc pas une preuve d’exclusion injustifiée et peut être incomplète si la configuration a changé.
+
+Après confirmation : accès restauré sans nouveau paiement ni invitations à refaire, anciens bannissements d’admission/inactivité encore en attente retirés, débannissement du groupe mis en file, notification personnelle avec bouton d’accès. Les sanctions réseau, permanentes ou anti-liens restent protégées. Les dates d’expiration des accès payés ne sont pas prolongées. Si le bot est absent du groupe, l’action attend son rétablissement ; le bot ne peut pas réinscrire un membre à sa place.
+
+### Communication aux membres
+
+Au premier démarrage de cette version, une campagne unique est préparée pour les utilisateurs connus disposant d’un panneau privé. Elle explique les invitations en surplus, la réserve et la correction du locker, dans leur langue enregistrée. L’envoi se fait en arrière-plan, au plus un message par seconde, sous réserve des autres limites Telegram. Le même destinataire n’est pas ajouté à nouveau au redémarrage.
+
+Les blocages sont classés comme non joignables. Les réponses perdues et les erreurs serveur laissant la livraison incertaine ne sont pas répétées automatiquement. Leurs états restent visibles dans **État du réseau**. Le déploiement prépare et commence la campagne ; aucune notification réelle n’a été envoyée depuis l’environnement de développement.
+
+### Réactivité et erreurs réseau
+
+- Contrôle d’inactivité par requête groupée : moins de 15 appels SQL pour le test de 1 000 membres, au lieu de requêtes par membre.
+- Nettoyages et bannissements de fond soumis au budget d’arrière-plan ; la modération en direct utilise toujours sa capacité prioritaire.
+- Reconnexion immédiate unique d’une connexion persistante fermée pour une **lecture** Telegram. Aucun renvoi immédiat d’un message dont la livraison serait incertaine.
+- `429` : respect du délai de Telegram sans consommer de tentative ni bloquer le thread en attente.
+- Envois de messages/photos dont la réponse est perdue : arrêt avec diagnostic, au lieu d’une répétition pouvant créer des doublons.
+- Les anciennes erreurs restent consultables. Une erreur `Bad Gateway` ou `TimeoutError` extérieure peut toujours survenir ; le code ne peut pas garantir la disponibilité de Telegram ou du réseau Railway.
+
+### Médias au-delà de 20 Mo
+
+L’API hébergée `api.telegram.org` limite le téléchargement à 20 Mo. Changer `MAX_MEDIA_MB` seul **ne relève pas cette limite**.
+
+Cette version prend en charge un serveur Bot API auto-hébergé :
+
+1. Installer le serveur officiel Telegram Bot API, avec ses propres `api_id` et `api_hash`, en mode `--local`, sur un réseau privé accessible au bot. Ce serveur n’est pas installé par cette archive.
+2. Suivre la procédure Telegram de bascule (`logOut` de l’API hébergée avant le serveur local). Arrêter l’ancienne instance du bot pendant cette transition. Ne pas exposer le service HTTP et ses fichiers au public.
+3. Monter le répertoire de fichiers du serveur au **même chemin absolu** dans les deux conteneurs. Configurer `TELEGRAM_LOCAL_FILES_ROOT` avec ce répertoire.
+4. Définir `TELEGRAM_API_URL=http://telegram-bot-api:8081` selon l’adresse réelle. Définir `MAX_MEDIA_MB=200` (défaut local : 200 Mio ; plafond configurable : 2 000 Mio).
+5. Redéployer puis utiliser **Réessayer les médias temporaires** : en mode serveur personnalisé, cette action inclut aussi les anciens échecs de taille, par lots de 20, si le groupe est toujours valide.
+
+Le téléchargement se fait par blocs de 1 Mio vers un fichier temporaire ; toute la vidéo n’est plus conservée simultanément en mémoire Python. Les tailles déclarées et effectivement lues sont contrôlées, ainsi que le répertoire autorisé. Les durées de téléchargement et de décodage restent bornées. L’analyse média demeure dans son processus séparé. Une vidéo trop volumineuse n’arrête pas l’analyse des autres fichiers ; son analyse visuelle n’est simplement pas disponible tant que la limite n’est pas résolue.
+
+Références officielles : https://core.telegram.org/bots/features#local-bot-api-server et https://core.telegram.org/bots/api#getfile.
+
+### Validation
+
+261 tests exécutés : 255 réussis, 6 intégrations PostgreSQL réseau ignorées. Huit scénarios SQL vérifiés séparément sur PostgreSQL 16.2 local, dont les nouvelles horloges, la réserve et la sélection des réhabilitations. Schéma et imports de l’archive vérifiés. Tests Telegram simulés : aucun chiffre de ces tests ne mesure la latence réelle entre les utilisateurs, Railway et Telegram.
+
+Les anciennes notes ci-dessous décrivent les versions précédentes ; les règles ci-dessus les remplacent en cas de différence.
+
+---
+
 ## Version 18 — démarrage résilient et pauses Telegram
 
 Le démarrage appelait `getMe` avant la gestion des erreurs de la boucle principale : une interruption réseau faisait sortir le programme et Railway redémarrait le conteneur. Cette version effectue `getMe` et `deleteWebhook` dans une initialisation avec reprise progressive (2, 4, 8, 16 puis 30 secondes entre tentatives). Elle attend aussi tout `retry_after` plus long renvoyé par Telegram. Elle ne crée les workers qu’après succès, conserve l’offset et ne supprime pas les mises à jour en attente.
