@@ -240,6 +240,16 @@ EXPECTED['portal_recipients']={'columns': [{'name': 'move_id', 'type': 'TEXT'}, 
 EXPECTED['portal_targets']={'columns': [{'name': 'move_id', 'type': 'TEXT'}, {'name': 'uid', 'type': 'BIGINT'}, {'name': 'target', 'type': 'TEXT'}, {'name': 'url', 'type': 'TEXT'}]}
 EXPECTED['media_failures']={'columns': [{'name': 'id', 'type': 'TEXT'}, {'name': 'payload', 'type': 'TEXT'}, {'name': 'category', 'type': 'TEXT'}, {'name': 'detail', 'type': 'TEXT'}, {'name': 'created', 'type': 'DOUBLE PRECISION'}]}
 
+# New ledgers are append-only; earlier deployed checksums remain unchanged.
+MIGRATIONS += (("008_fair_access.sql", "CREATE TABLE IF NOT EXISTS activity_clocks (uid BIGINT NOT NULL, gid TEXT NOT NULL, media DOUBLE PRECISION NOT NULL, joined DOUBLE PRECISION NOT NULL, checked DOUBLE PRECISION NOT NULL, seconds DOUBLE PRECISION NOT NULL DEFAULT 0, eligible INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(uid,gid)); CREATE TABLE IF NOT EXISTS rehabilitation (uid BIGINT NOT NULL, gid TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'review', created DOUBLE PRECISION NOT NULL, PRIMARY KEY(uid,gid)); CREATE TABLE IF NOT EXISTS referral_origins (invitee BIGINT PRIMARY KEY, gid TEXT NOT NULL); CREATE TABLE IF NOT EXISTS referral_reserves (invitee BIGINT PRIMARY KEY, uid BIGINT NOT NULL); CREATE INDEX IF NOT EXISTS reserve_user ON referral_reserves(uid,invitee); CREATE TABLE IF NOT EXISTS feature_notifications (uid BIGINT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'ready', due DOUBLE PRECISION NOT NULL DEFAULT 0);"),)
+for _table,_columns in {
+    'activity_clocks':[('uid','BIGINT'),('gid','TEXT'),('media','DOUBLE PRECISION'),('joined','DOUBLE PRECISION'),('checked','DOUBLE PRECISION'),('seconds','DOUBLE PRECISION'),('eligible','INTEGER')],
+    'rehabilitation':[('uid','BIGINT'),('gid','TEXT'),('state','TEXT'),('created','DOUBLE PRECISION')],
+    'referral_origins':[('invitee','BIGINT'),('gid','TEXT')],
+    'referral_reserves':[('invitee','BIGINT'),('uid','BIGINT')],
+    'feature_notifications':[('uid','BIGINT'),('state','TEXT'),('due','DOUBLE PRECISION')],
+}.items(): EXPECTED[_table]={'columns':[{'name':n,'type':t} for n,t in _columns]}
+
 class SchemaMismatch(RuntimeError):
     pass
 
