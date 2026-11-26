@@ -28,6 +28,8 @@ from app.services.portal_moves import PortalMoves
 
 from app.handlers.replacement import Replacement
 
-class App(Replacement, PortalMoves, Recovery, InviteLinks, Trials, Promotions, Advertising, MemberWorkflows, Welcome, Readiness, Monitoring, Context, Screens, Callbacks, LegacyPayments, Router,
+from app.services.fair_access import FairAccess
+
+class App(FairAccess, Replacement, PortalMoves, Recovery, InviteLinks, Trials, Promotions, Advertising, MemberWorkflows, Welcome, Readiness, Monitoring, Context, Screens, Callbacks, LegacyPayments, Router,
           Moderation, Scheduler, ManualPayments, PaymentScreens):
     """Composition root: handlers, services and adapters share one application context."""

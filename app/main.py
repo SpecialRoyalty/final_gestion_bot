@@ -26,6 +26,7 @@ def main():
         me=startup_call(api,db,stop,'getMe')
         startup_call(api,db,stop,'deleteWebhook',drop_pending_updates=False)
         app=App(db,api,owners,tz,support,me=me)
+        app.initialize_fair_access()
         app.install_command_menu()
         if stop.is_set():raise StartupStopped()
         allowed=['message','edited_message','callback_query','chat_member','my_chat_member','chat_join_request','pre_checkout_query']
