@@ -3,7 +3,7 @@ import hashlib
 import html
 import time
 import uuid
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 from app.keyboards.inline import button, keyboard
 from app.services.payments import METHODS, money, total
 from app.services.invite_links import PERMANENT_LINK
@@ -62,7 +62,7 @@ class MemberWorkflows:
         portal=self.db.one("SELECT * FROM groups WHERE enabled=1 AND role='portal'")
         if not portal: return self.screen(uid,self.tr(uid,'Le portail sera bientôt disponible.'),[[button(self.tr(uid,'⬅️ Accueil'),'home')]])
         url=self.target_link(uid,g,portal)
-        share='https://t.me/share/url?'+urlencode({'url':url,'text':self.tr(uid,'Rejoins notre portail !')})
+        share='https://t.me/share/url?'+urlencode({'url':url,'text':self.tr(uid,'🔥 Rejoins une communauté active qui garde le contact, même si un groupe saute. Ici, on échange et on participe !')},quote_via=quote)
         text='<b>'+html.escape(g['title'])+'</b>\n\n'+self.tr(uid,'Ce lien mène au portail et remplit ce groupe en priorité. Une fois complet, les invitations passent à l’objectif auquel il en manque le moins. Si tout est complet, elles sont conservées en réserve.')+'\n\n'+html.escape(url)+reserve_text
         self.screen(uid,text,[[button(self.tr(uid,'📤 Partager mon invitation'),url=share)],
             [button(self.tr(uid,'🔄 Régénérer mon lien'),'regen:'+gid)],
