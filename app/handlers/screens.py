@@ -15,6 +15,7 @@ class Screens:
 
     def _show(self, uid, page='home'):
         user = self.user(uid)
+        self.allocate_reserve(uid)
         if not user['permanent'] and self.launch_gate(uid): return
         if page=='language':
             from app.utils.i18n import LANGUAGES

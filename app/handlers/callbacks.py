@@ -34,6 +34,7 @@ class Callbacks:
                 self.db.run('UPDATE groups SET weekday=? WHERE id=?',(int(parts[2]),g['id']))
                 return self.show(uid,'a:'+g['id'])
             return
+        if self.rehabilitation_callback(uid,data):return
         if self.replacement_callback(uid,data):return
         if self.trial_callback(uid,data):return
         if self.advertising_callback(uid,data): return

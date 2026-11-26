@@ -50,17 +50,20 @@ class MemberWorkflows:
         return self.show(uid,'member')
 
     def invitation_screen(self,uid,gid=None):
+        self.allocate_reserve(uid)
+        reserve=self.db.one('SELECT COUNT(*) AS n FROM referral_reserves WHERE uid=?',(uid,))['n']
+        reserve_text='\n\n'+self.tr(uid,'Invitations en réserve : ')+str(reserve)
         groups=self.db.all("SELECT * FROM groups WHERE enabled=1 AND role IN ('chat','always') ORDER BY title")
         if not gid:
             rows=[[button(g['title'],'invite:'+g['id'])] for g in groups]
-            return self.screen(uid,self.tr(uid,'Choisis le groupe à faire progresser. Chaque lien mène au portail et compte uniquement pour le groupe choisi.') if groups else self.tr(uid,'Aucun objectif d’invitation disponible.'),rows+[[button(self.tr(uid,'⬅️ Accueil'),'home')]])
+            return self.screen(uid,(self.tr(uid,'Choisis ton objectif prioritaire. Chaque lien mène au portail. Les invitations en surplus passent aux autres objectifs.') if groups else self.tr(uid,'Aucun objectif d’invitation disponible.'))+reserve_text,rows+[[button(self.tr(uid,'⬅️ Accueil'),'home')]])
         g=next((g for g in groups if g['id']==gid),None)
         if not g: return self.invitation_screen(uid)
         portal=self.db.one("SELECT * FROM groups WHERE enabled=1 AND role='portal'")
         if not portal: return self.screen(uid,self.tr(uid,'Le portail sera bientôt disponible.'),[[button(self.tr(uid,'⬅️ Accueil'),'home')]])
         url=self.target_link(uid,g,portal)
         share='https://t.me/share/url?'+urlencode({'url':url,'text':self.tr(uid,'Rejoins notre portail !')})
-        text='<b>'+html.escape(g['title'])+'</b>\n\n'+self.tr(uid,'Ce lien mène au portail. Ses invitations font progresser uniquement ce groupe.')+'\n\n'+html.escape(url)
+        text='<b>'+html.escape(g['title'])+'</b>\n\n'+self.tr(uid,'Ce lien mène au portail et remplit ce groupe en priorité. Une fois complet, les invitations passent à l’objectif auquel il en manque le moins. Si tout est complet, elles sont conservées en réserve.')+'\n\n'+html.escape(url)+reserve_text
         self.screen(uid,text,[[button(self.tr(uid,'📤 Partager mon invitation'),url=share)],
             [button(self.tr(uid,'🔄 Régénérer mon lien'),'regen:'+gid)],
             [button(self.tr(uid,'⬅️ Retour'),'g:'+gid),button(self.tr(uid,'Changer d’objectif'),'invite')]])
