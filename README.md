@@ -1,3 +1,27 @@
+## Version 21 — notifications des accès débloqués
+
+Les objectifs d’invitations atteints débloquent désormais l’accès en arrière-plan, sans attendre une visite ou un rafraîchissement du panneau. Un message privé traduit annonce le groupe et propose **Retrouver mon accès**. Le bouton ouvre la page du groupe dans le bot, qui produit le lien d’accès approprié. Le message ne prétend pas que le groupe est ouvert : les horaires et le locker restent applicables.
+
+Le contrôle est exécuté à chaque cycle de planification, après les invitations, par lots de 50. Il rattrape aussi les objectifs déjà atteints avant ce déploiement et les accès par invitations déjà accordés mais non rejoints. Il prend en compte les invitations transférées et les récompenses de bugs approuvées. Les accès payants actifs ne sont pas remplacés. Les membres déjà présents ne reçoivent pas ce rappel.
+
+La migration embarquée `009_unlock_notifications.sql` conserve un enregistrement par utilisateur, groupe et cycle d’invitations. Le déblocage, cet enregistrement et la mise en file sont transactionnels. Un redémarrage ou des rafraîchissements répétés ne remettent pas le message en file. Les bannissements et la validité de l’accès sont revérifiés à l’envoi. Les délais Telegram sont respectés. Si la réponse d’un envoi est perdue, son résultat reste non confirmé dans les diagnostics, sans renvoi automatique risquant un doublon. Un bot bloqué par l’utilisateur ne peut pas lui livrer la notification.
+
+Installer la version complète et conserver la base ; un seul replica. La notification intervient après validation de l’invitation et traitement des files, pas nécessairement au moment où un lien est partagé. Aucun envoi en production n’a été exécuté depuis cet environnement.
+
+Validation : 272 tests exécutés, 266 réussis et 6 intégrations PostgreSQL réseau ignorées. Requêtes de rattrapage et migration également vérifiées sur PostgreSQL 16.2 local. Appels Telegram simulés.
+
+---
+
+## Version 20 — texte de partage
+
+Le bouton de partage encode maintenant les espaces avec `%20`, au lieu de `+`. Les signes `+` des véritables liens Telegram restent encodés avec `%2B` et sont conservés au décodage. Nouveau message traduit en français, anglais, italien et espagnol :
+
+🔥 Rejoins une communauté active qui garde le contact, même si un groupe saute. Ici, on échange et on participe !
+
+La formulation met en avant la continuité de la communauté, sans promettre qu’un groupe Telegram ne pourra jamais être supprimé. Actualiser la page **Inviter mes amis** après déploiement pour obtenir le nouveau bouton. Aucun changement de schéma.
+
+---
+
 ## Version 19 — invitations en surplus, locker et réactivité
 
 Remplacer **toute l’application**, conserver la base et les variables existantes, puis redéployer **un seul replica**. La migration `008_fair_access.sql` est embarquée dans Python et s’applique automatiquement. Les sept migrations déjà livrées restent identiques. Cette archive n’a pas été déployée sur Railway depuis cet environnement.
