@@ -250,6 +250,9 @@ for _table,_columns in {
     'feature_notifications':[('uid','BIGINT'),('state','TEXT'),('due','DOUBLE PRECISION')],
 }.items(): EXPECTED[_table]={'columns':[{'name':n,'type':t} for n,t in _columns]}
 
+MIGRATIONS += (("009_unlock_notifications.sql", "CREATE TABLE IF NOT EXISTS unlock_notifications (uid BIGINT NOT NULL, gid TEXT NOT NULL, base INTEGER NOT NULL, created DOUBLE PRECISION NOT NULL, PRIMARY KEY(uid,gid,base));"),)
+EXPECTED['unlock_notifications']={'columns':[{'name':n,'type':t} for n,t in [('uid','BIGINT'),('gid','TEXT'),('base','INTEGER'),('created','DOUBLE PRECISION')]]}
+
 class SchemaMismatch(RuntimeError):
     pass
 
