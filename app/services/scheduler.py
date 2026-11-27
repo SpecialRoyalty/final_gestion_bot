@@ -98,6 +98,9 @@ class Scheduler:
                 if '_activity' in payload:
                     self.perform_activity_job(job,payload)
                     continue
+                unlock=payload.pop('_unlock',None)
+                if unlock and not self.unlock_delivery_valid(recipient,unlock):
+                    self.db.run('DELETE FROM jobs WHERE id=?',(job['id'],));continue
                 guard_gid=payload.pop('_unless_entitled',None)
                 if guard_gid and job['method']=='banChatMember':
                     a=self.access(payload['user_id'],guard_gid)
@@ -390,7 +393,7 @@ class Scheduler:
             self.alert(warning); self.db.set('media_warning','')
         failed=[]
         # Opening/countdowns do not depend on successful referral checks or queue delivery.
-        for name in ('expiry','schedule','announcements','referrals','activity','ads','rights','diagnostics','rosters','permalinks'):
+        for name in ('expiry','schedule','announcements','referrals','unlocks','activity','ads','rights','diagnostics','rosters','permalinks'):
             self.db.set('task:'+name+':attempt',time.time())
             try:
                 getattr(self,'task_'+name)(now)
