@@ -1,6 +1,5 @@
 import html
 import time
-from urllib.parse import urlencode
 from app.utils.core import progress
 from app.keyboards.inline import button
 from app.keyboards.admin_groups import group_controls
@@ -59,7 +58,9 @@ class Screens:
             a = self.access(uid,g['id'])
             n = max(0,self.count(uid,g['id'])-(a['base'] if a else 0))
             if g['role'] in ('chat','always') and not self.entitled(uid,g) and n >= g['goal']:
-                self.grant(uid,g,'referral')
+                with self.db.transaction():
+                    self.lock_inviter(uid)
+                    self.unlock_goal(uid,g['id'])
             description=self.db.setting('description:'+g['id']+':'+self.language(uid),g['description']).strip() or self.tr(uid,'La présentation de ce groupe est en cours de préparation.')
             state=self.tr(uid,'🟢 Ouvert') if self.display_open(g) else self.tr(uid,'🔴 Fermé')
             text = f'<b>{html.escape(g["title"])}</b>\n{self.tr(uid,ROLE_LABELS.get(g["role"],g["role"]))} · {state}\n\n{html.escape(description)}\n\n'
